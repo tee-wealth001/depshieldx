@@ -1,8 +1,31 @@
 # depshieldx
 
+[![PyPI version](https://img.shields.io/pypi/v/depshieldx.svg)](https://pypi.org/project/depshieldx/)
+[![Docs](https://img.shields.io/badge/docs-github%20pages-10b981)](https://tee-wealth001.github.io/depshieldx/)
+
 `depshieldx` is a safer wrapper around Python package install and scan workflows.
 
 Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and can optionally run a deeper Docker + Trivy validation path. Every completed install or scan also writes signed local receipt JSON files.
+
+## Installation
+
+Install the published package from PyPI:
+
+```bash
+python -m pip install depshieldx
+```
+
+If your machine has multiple Python versions, use a Python `3.11.4+` interpreter explicitly:
+
+```bash
+python3.11 -m pip install depshieldx
+```
+
+Project links:
+
+- PyPI: https://pypi.org/project/depshieldx/
+- Docs: https://tee-wealth001.github.io/depshieldx/
+- Source: https://github.com/tee-wealth001/depshieldx
 
 ## What It Does
 
@@ -168,16 +191,14 @@ depshieldx ui --no-open
 
 ## Release Notes
 
-Before a public PyPI release:
+For a release build:
 
 - confirm the included Apache 2.0 license still matches how you want to distribute the project
 - build and verify distributions in a Python `3.11.4+` environment
 - run `python -m build`
 - run `python -m twine check dist/*`
-
-Current naming caveat:
-
-- the `depshieldx` distribution name is already taken on PyPI, so a public upload will need a different package name even if the repository keeps the `depshieldx` branding
+- for TestPyPI, run the `Release Checks` workflow manually
+- for PyPI, push a version tag such as `v0.1.0`
 
 ## Common Examples
 
