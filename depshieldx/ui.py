@@ -1,0 +1,1228 @@
+import json
+import socket
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse
+import webbrowser
+
+from .cache import get_cache_root
+from .receipts import _receipts_root_candidates
+
+
+def _safe_json_load(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _existing_receipts_root() -> Path | None:
+    for candidate in _receipts_root_candidates():
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _format_timestamp(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _receipt_rows() -> list[dict]:
+    root = _existing_receipts_root()
+    if root is None:
+        return []
+
+    rows = []
+    for path in sorted(root.glob("*.json"), reverse=True):
+        payload = _safe_json_load(path)
+        if not payload:
+            continue
+        summary = payload.get("summary") or {}
+        package = summary.get("package") or {}
+        install = summary.get("install") or {}
+        rows.append(
+            {
+                "kind": "receipt",
+                "id": payload.get("receipt_id") or path.stem,
+                "created_at": _format_timestamp(payload.get("created_at")),
+                "decision": payload.get("decision"),
+                "package": payload.get("package"),
+                "package_version": payload.get("package_version"),
+                "mode": payload.get("mode"),
+                "requested_target": payload.get("requested_target"),
+                "install_target": install.get("target"),
+                "project_url": package.get("project_url"),
+                "path": str(path),
+                "raw": payload,
+            }
+        )
+    return rows
+
+
+def _bundle_rows() -> list[dict]:
+    cache_root = get_cache_root()
+    if not cache_root.exists():
+        return []
+
+    rows = []
+    for entry_dir in sorted(cache_root.iterdir(), reverse=True):
+        if not entry_dir.is_dir():
+            continue
+        if entry_dir.name in {"receipts", "provenance", "keys"}:
+            continue
+
+        metadata_path = entry_dir / "metadata.json"
+        lock_path = entry_dir / "depshieldx-lock.txt"
+        if not metadata_path.exists() or not lock_path.exists():
+            continue
+
+        payload = _safe_json_load(metadata_path)
+        if not payload:
+            continue
+
+        rows.append(
+            {
+                "kind": "bundle",
+                "id": entry_dir.name,
+                "cached_at": _format_timestamp(payload.get("cached_at")),
+                "success": payload.get("success"),
+                "error_type": payload.get("error_type"),
+                "backend": (payload.get("isolation") or {}).get("backend"),
+                "downloaded_file_count": len(payload.get("downloaded_files") or []),
+                "artifact_count": len(payload.get("artifact_hashes") or {}),
+                "path": str(entry_dir),
+                "raw": payload,
+            }
+        )
+    return rows
+
+
+def _provenance_rows() -> list[dict]:
+    provenance_root = get_cache_root() / "provenance"
+    if not provenance_root.exists():
+        return []
+
+    rows = []
+    for path in sorted(provenance_root.glob("*.json"), reverse=True):
+        payload = _safe_json_load(path)
+        if not payload:
+            continue
+        result = payload.get("result") or {}
+        signals = result.get("signals") or {}
+        rows.append(
+            {
+                "kind": "provenance",
+                "id": path.stem,
+                "cached_at": _format_timestamp(payload.get("cached_at")),
+                "package": result.get("package"),
+                "package_version": result.get("version"),
+                "block": bool(result.get("block")),
+                "warning_count": len(result.get("warnings") or []),
+                "info_count": len(result.get("infos") or []),
+                "selected_file_count": signals.get("selected_file_count", 0),
+                "attested_file_count": signals.get("attested_file_count", 0),
+                "verified_attestation_count": signals.get("verified_attestation_count", 0),
+                "path": str(path),
+                "raw": payload,
+            }
+        )
+    return rows
+
+
+def build_ui_payload() -> dict:
+    receipts = _receipt_rows()
+    bundles = _bundle_rows()
+    provenance = _provenance_rows()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "cache_root": str(get_cache_root()),
+        "receipts": receipts,
+        "bundles": bundles,
+        "provenance": provenance,
+        "summary": {
+            "receipt_count": len(receipts),
+            "bundle_count": len(bundles),
+            "provenance_count": len(provenance),
+        },
+    }
+
+
+def _dashboard_html() -> str:
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>depshieldx Cache Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: #0f1419;
+      --bg-secondary: #1a202c;
+      --bg-tertiary: #2d3748;
+      --accent: #10b981;
+      --accent-light: #34d399;
+      --accent-dark: #059669;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text-primary: #f8fafc;
+      --text-secondary: #cbd5e1;
+      --text-muted: #94a3b8;
+      --border: #334155;
+      --border-light: #475569;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+      --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.2);
+      --shadow-xl: 0 20px 50px rgba(16, 185, 129, 0.1);
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+      --mono: 'Fira Code', 'SF Mono', 'Courier New', monospace;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Animated Background */
+    .gradient-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(circle at 20% 50%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+        var(--bg-primary);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      width: min(1600px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 40px 0;
+    }
+
+    /* Header */
+    header {
+      padding: 32px 0 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 32px;
+    }
+
+    .header-left h1 {
+      font-size: 2.2rem;
+      font-weight: 800;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header-left p {
+      color: var(--text-secondary);
+      font-size: 1rem;
+      max-width: 500px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      width: fit-content;
+    }
+
+    .eyebrow::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Status Cards */
+    .status-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    .status-card {
+      background: rgba(26, 32, 44, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      transition: all 0.3s ease;
+    }
+
+    .status-card:hover {
+      border-color: var(--accent);
+      background: rgba(26, 32, 44, 0.9);
+      transform: translateY(-2px);
+    }
+
+    .status-label {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .status-value {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .status-detail {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      font-family: var(--mono);
+      word-break: break-all;
+    }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    .metric-card {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(16, 185, 129, 0.02));
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .metric-card:hover {
+      border-color: var(--accent);
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.04));
+      transform: translateY(-4px);
+    }
+
+    .metric-icon {
+      font-size: 2rem;
+      margin-bottom: 8px;
+    }
+
+    .metric-value {
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: var(--accent);
+      line-height: 1;
+    }
+
+    .metric-label {
+      margin-top: 8px;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    /* Controls Section */
+    .controls {
+      display: flex;
+      gap: 14px;
+      margin: 32px 0;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      background: rgba(26, 32, 44, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 6px;
+    }
+
+    .tab {
+      padding: 10px 16px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    .tab:hover {
+      color: var(--text-primary);
+    }
+
+    .tab.active {
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      color: var(--bg-primary);
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+    }
+
+    .search-wrapper {
+      flex: 1;
+      min-width: 260px;
+      position: relative;
+    }
+
+    .search-wrapper::before {
+      content: '🔍';
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+    }
+
+    .search {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: rgba(26, 32, 44, 0.6);
+      border-radius: 10px;
+      padding: 10px 14px 10px 40px;
+      font-size: 0.95rem;
+      color: var(--text-primary);
+      transition: all 0.3s ease;
+      font-family: var(--sans);
+    }
+
+    .search::placeholder {
+      color: var(--text-muted);
+    }
+
+    .search:focus {
+      outline: none;
+      border-color: var(--accent);
+      background: rgba(26, 32, 44, 0.8);
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      padding: 10px 18px;
+      border: 1px solid var(--border);
+      background: rgba(26, 32, 44, 0.6);
+      color: var(--text-secondary);
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(26, 32, 44, 0.9);
+    }
+
+    .button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      border-color: var(--accent);
+      color: var(--bg-primary);
+    }
+
+    .button.primary:hover {
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+      transform: translateY(-2px);
+    }
+
+    /* Main Content */
+    .content {
+      display: grid;
+      grid-template-columns: 1.3fr 0.7fr;
+      gap: 20px;
+      align-items: start;
+    }
+
+    .table-card, .detail-card {
+      background: rgba(26, 32, 44, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .table-card:hover, .detail-card:hover {
+      border-color: var(--accent);
+      background: rgba(26, 32, 44, 0.8);
+    }
+
+    .card-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .card-header h2 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .card-header p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .row-count {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), transparent);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--accent);
+      font-family: var(--mono);
+    }
+
+    /* Table */
+    .table-wrap {
+      overflow: auto;
+      max-height: 70vh;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 800px;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      padding: 12px 16px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 700;
+      text-align: left;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-light);
+      font-size: 0.9rem;
+      vertical-align: middle;
+    }
+
+    tbody tr {
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    tbody tr:hover {
+      background: rgba(16, 185, 129, 0.05);
+    }
+
+    tbody tr.active {
+      background: rgba(16, 185, 129, 0.15);
+      border-left: 3px solid var(--accent);
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent-light);
+      word-break: break-all;
+    }
+
+    /* Badge */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      border: 1px solid;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .badge.ok {
+      color: var(--success);
+      border-color: rgba(16, 185, 129, 0.3);
+      background: rgba(16, 185, 129, 0.1);
+    }
+
+    .badge.ok::before {
+      content: '✓';
+    }
+
+    .badge.warn {
+      color: var(--warning);
+      border-color: rgba(245, 158, 11, 0.3);
+      background: rgba(245, 158, 11, 0.1);
+    }
+
+    .badge.warn::before {
+      content: '⚠';
+    }
+
+    .badge.bad {
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.3);
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .badge.bad::before {
+      content: '✗';
+    }
+
+    /* Empty State */
+    .empty {
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .empty p {
+      font-size: 1rem;
+      margin-bottom: 8px;
+    }
+
+    /* Detail Sidebar */
+    .card-header {
+      display: block;
+    }
+
+    .detail-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-header h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .detail-header p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .detail-content {
+      padding: 20px;
+      overflow-y: auto;
+      max-height: calc(70vh - 60px);
+    }
+
+    .detail-meta {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .detail-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .detail-box-label {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .detail-box-value {
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      font-family: var(--mono);
+      word-break: break-all;
+    }
+
+    .detail-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 16px 0;
+    }
+
+    .detail-label {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--accent-light);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.5;
+    }
+
+    /* Responsive */
+    @media (max-width: 1200px) {
+      .content {
+        grid-template-columns: 1fr;
+      }
+
+      .header-content {
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .controls {
+        flex-direction: column;
+      }
+
+      .tabs, .search-wrapper, .action-buttons {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .shell {
+        width: calc(100vw - 20px);
+        padding: 20px 0;
+      }
+
+      .header-left h1 {
+        font-size: 1.8rem;
+      }
+
+      .status-cards {
+        grid-template-columns: 1fr;
+      }
+
+      .metrics-grid {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        min-width: 100%;
+      }
+
+      .table-wrap {
+        max-height: 50vh;
+      }
+
+      .detail-content {
+        max-height: 50vh;
+      }
+
+      th, td {
+        padding: 10px 12px;
+        font-size: 0.85rem;
+      }
+
+      .mono {
+        font-size: 0.75rem;
+      }
+    }
+
+    /* Loading & Animations */
+    @keyframes shimmer {
+      0% { opacity: 0.5; }
+      50% { opacity: 1; }
+      100% { opacity: 0.5; }
+    }
+
+    .loading {
+      animation: shimmer 2s infinite;
+    }
+
+    /* Scrollbar Styling */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-secondary);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="gradient-bg"></div>
+
+  <div class="shell">
+    <!-- Header -->
+    <header>
+      <div class="header-content">
+        <div class="header-left">
+          <div class="eyebrow">Cache Dashboard</div>
+          <h1>depshieldx Local Storage</h1>
+          <p>Browse receipts, provenance cache entries, and deep-scan artifacts. Everything is read-only and stored locally.</p>
+        </div>
+        <div class="status-cards">
+          <div class="status-card">
+            <div class="status-label">Cache Location</div>
+            <div class="status-detail" id="cache-root">Loading...</div>
+          </div>
+          <div class="status-card">
+            <div class="status-label">Last Updated</div>
+            <div class="status-detail" id="generated-at">Loading...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Metrics -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-value" id="receipt-count">0</div>
+          <div class="metric-label">Receipts</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="bundle-count">0</div>
+          <div class="metric-label">Bundle Entries</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="provenance-count">0</div>
+          <div class="metric-label">Provenance Entries</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Controls -->
+    <section class="controls">
+      <div class="tabs">
+        <button class="tab active" data-kind="receipts"> Receipts</button>
+        <button class="tab" data-kind="bundles"> Bundle Cache</button>
+        <button class="tab" data-kind="provenance"> Provenance</button>
+      </div>
+      <div class="search-wrapper">
+        <input id="search" class="search" type="search" placeholder="Search by package, version, decision, ID..." />
+      </div>
+      <div class="action-buttons">
+        <button id="refresh" class="button primary">
+          <span>↻</span> Refresh
+        </button>
+        <button id="copy-json" class="button">
+           Copy JSON
+        </button>
+      </div>
+    </section>
+
+    <!-- Main Content -->
+    <section class="content">
+      <!-- Table -->
+      <div class="table-card">
+        <div class="card-header">
+          <div>
+            <h2 id="table-title">Receipts</h2>
+            <p id="table-subtitle">Signed local records of install and scan decisions.</p>
+          </div>
+          <div class="row-count" id="row-count">0 rows</div>
+        </div>
+        <div id="table-host" class="table-wrap"></div>
+      </div>
+
+      <!-- Detail Panel -->
+      <div class="detail-card">
+        <div class="detail-header">
+          <h2>Details</h2>
+          <p>Click a row to view its full JSON payload</p>
+        </div>
+        <div class="detail-content">
+          <div class="detail-meta" id="detail-meta"></div>
+          <span class="detail-label">Raw JSON</span>
+          <pre id="detail-json">{}</pre>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const datasetConfig = {
+      receipts: {
+        title: "Receipts",
+        subtitle: "Signed local records of install and scan decisions.",
+        icon: "",
+        columns: [
+          ["created_at", "Created"],
+          ["package", "Package"],
+          ["package_version", "Version"],
+          ["decision", "Decision"],
+          ["mode", "Mode"],
+          ["requested_target", "Requested Target"],
+          ["id", "Receipt ID"]
+        ]
+      },
+      bundles: {
+        title: "Bundle Cache",
+        subtitle: "Deep-scan bundle cache entries saved under the local cache root.",
+        icon: "",
+        columns: [
+          ["cached_at", "Cached"],
+          ["id", "Fingerprint"],
+          ["backend", "Backend"],
+          ["success", "Success"],
+          ["error_type", "Error Type"],
+          ["downloaded_file_count", "Files"],
+          ["artifact_count", "Artifacts"]
+        ]
+      },
+      provenance: {
+        title: "Provenance Cache",
+        subtitle: "Per-package provenance and attestation verification cache entries.",
+        icon: "",
+        columns: [
+          ["cached_at", "Cached"],
+          ["package", "Package"],
+          ["package_version", "Version"],
+          ["block", "Blocked"],
+          ["warning_count", "Warnings"],
+          ["info_count", "Infos"],
+          ["attested_file_count", "Attested Files"],
+          ["verified_attestation_count", "Verified Attestations"]
+        ]
+      }
+    };
+
+    const state = {
+      payload: null,
+      currentKind: "receipts",
+      selectedId: null,
+      query: ""
+    };
+
+    function badgeClass(value) {
+      const lowered = String(value).toLowerCase();
+      if (["allowed", "passed", "true", "yes", "1", "none"].includes(lowered)) return "ok";
+      if (["blocked", "failed", "false", "no", "0"].includes(lowered)) return "bad";
+      return "warn";
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function currentRows() {
+      const rows = (state.payload && state.payload[state.currentKind]) || [];
+      const query = state.query.trim().toLowerCase();
+      if (!query) return rows;
+      return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(query));
+    }
+
+    function renderSummary() {
+      const summary = (state.payload && state.payload.summary) || {};
+      document.getElementById("receipt-count").textContent = summary.receipt_count || 0;
+      document.getElementById("bundle-count").textContent = summary.bundle_count || 0;
+      document.getElementById("provenance-count").textContent = summary.provenance_count || 0;
+      document.getElementById("cache-root").textContent = (state.payload && state.payload.cache_root) || "Unknown";
+      document.getElementById("generated-at").textContent = (state.payload && state.payload.generated_at) || "Never";
+    }
+
+    function renderTable() {
+      const config = datasetConfig[state.currentKind];
+      const rows = currentRows();
+      
+      document.getElementById("table-title").textContent = config.icon + " " + config.title;
+      document.getElementById("table-subtitle").textContent = config.subtitle;
+      
+      const rowText = rows.length === 1 ? "1 row" : `${rows.length} rows`;
+      document.getElementById("row-count").textContent = rowText;
+
+      const host = document.getElementById("table-host");
+      
+      if (!rows.length) {
+        host.innerHTML = '<div class="empty"><div class="empty-icon">📭</div><p>No matching entries found.</p><p style="font-size: 0.85rem;">Try adjusting your search or refresh to reload.</p></div>';
+        renderDetail(null);
+        return;
+      }
+
+      const header = config.columns.map(([key, label]) => "<th>" + escapeHtml(label) + "</th>").join("");
+      
+      const body = rows.map((row) => {
+        const cells = config.columns.map(([key]) => {
+          const value = row[key];
+          
+          if (key === "decision" || key === "success" || key === "block" || key === "error_type") {
+            if (value === null || value === undefined || value === "") return "<td></td>";
+            return '<td><span class="badge ' + badgeClass(value) + '">' + escapeHtml(value) + "</span></td>";
+          }
+          
+          if (key === "id" || key === "requested_target") {
+            return '<td class="mono">' + (value ? escapeHtml(String(value).substring(0, 16)) + "..." : "") + "</td>";
+          }
+          
+          return "<td>" + escapeHtml(value ?? "") + "</td>";
+        }).join("");
+        
+        const active = state.selectedId === row.id ? " active" : "";
+        return '<tr class="' + active.trim() + '" data-id="' + escapeHtml(row.id) + '" data-full-id="' + escapeHtml(row.id) + '">' + cells + "</tr>";
+      }).join("");
+
+      host.innerHTML = "<table><thead><tr>" + header + "</tr></thead><tbody>" + body + "</tbody></table>";
+      
+      host.querySelectorAll("tbody tr").forEach((rowEl) => {
+        rowEl.addEventListener("click", () => {
+          state.selectedId = rowEl.getAttribute("data-full-id");
+          renderTable();
+          const selected = currentRows().find((row) => row.id === state.selectedId);
+          renderDetail(selected || null);
+        });
+      });
+
+      const selected = currentRows().find((row) => row.id === state.selectedId) || rows[0];
+      state.selectedId = selected?.id;
+      renderDetail(selected || null);
+    }
+
+    function renderDetail(row) {
+      const metaHost = document.getElementById("detail-meta");
+      const jsonHost = document.getElementById("detail-json");
+      
+      if (!row) {
+        metaHost.innerHTML = '<div class="empty-icon">👈</div><p>Select a row to view details</p>';
+        jsonHost.textContent = "{}";
+        return;
+      }
+
+      const meta = [];
+      if (row.kind) meta.push(["Type", row.kind]);
+      if (row.id) meta.push(["ID", row.id]);
+      if (row.path) meta.push(["Path", row.path]);
+      if (row.package) meta.push(["Package", row.package + (row.package_version ? "==" + row.package_version : "")]);
+      if (row.created_at) meta.push(["Created", row.created_at]);
+      if (row.cached_at) meta.push(["Cached", row.cached_at]);
+
+      metaHost.innerHTML = meta.map(([label, value]) => (
+        '<div class="detail-box"><span class="detail-box-label">' + escapeHtml(label) + '</span><div class="detail-box-value">' + escapeHtml(value) + "</div></div>"
+      )).join("");
+
+      jsonHost.textContent = JSON.stringify(row.raw || row || {}, null, 2);
+    }
+
+    async function loadData() {
+      try {
+        const response = await fetch("/api/cache", { cache: "no-store" });
+        state.payload = await response.json();
+        renderSummary();
+        renderTable();
+      } catch (error) {
+        document.getElementById("table-host").innerHTML =
+          '<div class="empty"><div class="empty-icon">⚠️</div><p>Could not load cache data</p><p style="font-size: 0.85rem; color: var(--danger);">' + escapeHtml(error.message || "Unknown error") + "</p></div>";
+      }
+    }
+
+    // Event listeners
+    document.querySelectorAll(".tab").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+        button.classList.add("active");
+        state.currentKind = button.getAttribute("data-kind");
+        state.selectedId = null;
+        renderTable();
+      });
+    });
+
+    document.getElementById("search").addEventListener("input", (event) => {
+      state.query = event.target.value;
+      state.selectedId = null;
+      renderTable();
+    });
+
+    document.getElementById("refresh").addEventListener("click", loadData);
+    
+    document.getElementById("copy-json").addEventListener("click", async () => {
+      const selected = currentRows().find((row) => row.id === state.selectedId);
+      if (!selected) return;
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(selected.raw || selected, null, 2));
+        const btn = document.getElementById("copy-json");
+        const orig = btn.textContent;
+        btn.textContent = "✓ Copied!";
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+      } catch (err) {
+        console.error("Copy failed:", err);
+      }
+    });
+
+    // Initial load
+    loadData();
+  </script>
+</body>
+</html>
+"""
+
+
+def _make_handler():
+    html_bytes = _dashboard_html().encode("utf-8")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path in {"", "/"}:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html_bytes)))
+                self.end_headers()
+                self.wfile.write(html_bytes)
+                return
+
+            if parsed.path == "/api/cache":
+                payload = json.dumps(build_ui_payload(), indent=2, sort_keys=True).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"Not found")
+
+        def log_message(self, format, *args):
+            return
+
+    return Handler
+
+
+def create_ui_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), _make_handler())
+
+
+def local_url(server: ThreadingHTTPServer) -> str:
+    host, port = server.server_address[:2]
+    return f"http://{host}:{port}/"
+
+
+def _can_open_browser() -> bool:
+    try:
+        webbrowser.get()
+    except webbrowser.Error:
+        return False
+    return True
+
+
+def serve_ui(host: str = "127.0.0.1", port: int = 0, open_browser: bool = True, echo=print) -> str:
+    server = create_ui_server(host=host, port=port)
+    url = local_url(server)
+    echo(f"depshieldx UI running at {url}")
+    echo("Press Ctrl-C to stop.")
+    if open_browser:
+        if _can_open_browser():
+            webbrowser.open(url)
+        else:
+            echo("Browser open unavailable in this environment. Open the URL manually.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        echo("\nStopping depshieldx UI...")
+    finally:
+        server.server_close()
+    return url
+
+
+def port_is_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True

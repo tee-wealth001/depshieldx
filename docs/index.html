@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>depshieldx – Secure Python Package Management</title>
+  <meta
+    name="description"
+    content="Safer Python package install and scan workflows with provenance checks, CVE lookups, Docker plus Trivy deep mode, and signed receipts."
+  />
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: #0f1419;
+      --bg-secondary: #1a202c;
+      --bg-tertiary: #2d3748;
+      --accent: #10b981;
+      --accent-light: #34d399;
+      --accent-dark: #059669;
+      --text-primary: #f8fafc;
+      --text-secondary: #cbd5e1;
+      --text-muted: #94a3b8;
+      --border: #334155;
+      --border-light: #475569;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+      --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.2);
+      --shadow-xl: 0 20px 50px rgba(16, 185, 129, 0.1);
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+      --mono: 'Fira Code', 'Courier New', monospace;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    .gradient-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      height: 100%;
+      background: 
+        radial-gradient(circle at 20% 50%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+        var(--bg-primary);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: min(1280px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 20px 0;
+    }
+
+    /* Header & Navigation */
+    header {
+      backdrop-filter: blur(10px);
+      background: rgba(15, 20, 25, 0.7);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      transition: all 0.3s ease;
+    }
+
+    .header-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 0;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      text-decoration: none;
+      color: var(--text-primary);
+      transition: all 0.3s ease;
+    }
+
+    .logo:hover {
+      color: var(--accent);
+    }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--bg-primary);
+      font-weight: 900;
+      font-size: 16px;
+    }
+
+    nav {
+      display: flex;
+      gap: 8px;
+    }
+
+    nav a {
+      padding: 8px 16px;
+      border-radius: 8px;
+      text-decoration: none;
+      color: var(--text-secondary);
+      font-weight: 500;
+      font-size: 0.95rem;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    nav a::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      width: 0;
+      height: 2px;
+      background: var(--accent);
+      transition: all 0.3s ease;
+      transform: translateX(-50%);
+    }
+
+    nav a:hover {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--accent);
+    }
+
+    nav a:hover::after {
+      width: calc(100% - 32px);
+    }
+
+    /* Hero Section */
+    .hero {
+      padding: 80px 0 60px;
+    }
+
+    .hero-content {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 60px;
+      align-items: center;
+    }
+
+    .hero-text h1 {
+      font-size: clamp(2.5rem, 8vw, 4rem);
+      line-height: 1.15;
+      margin-bottom: 20px;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      margin-bottom: 16px;
+      width: fit-content;
+    }
+
+    .badge::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .hero-text p {
+      font-size: 1.1rem;
+      color: var(--text-secondary);
+      margin-bottom: 30px;
+      line-height: 1.8;
+      max-width: 500px;
+    }
+
+    .cta-buttons {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 1rem;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .button::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.1);
+      transition: left 0.3s ease;
+      z-index: -1;
+    }
+
+    .button:hover::before {
+      left: 100%;
+    }
+
+    .button-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      color: var(--bg-primary);
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+    }
+
+    .button-primary:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 0 30px rgba(16, 185, 129, 0.5);
+    }
+
+    .button-secondary {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--accent);
+      border: 2px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .button-secondary:hover {
+      background: rgba(16, 185, 129, 0.2);
+      border-color: var(--accent);
+      transform: translateY(-3px);
+    }
+
+    /* Terminal/Code Display */
+    .hero-visual {
+      position: relative;
+    }
+
+    .terminal-window {
+      background: rgba(26, 32, 44, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow-xl);
+      overflow: hidden;
+      backdrop-filter: blur(10px);
+    }
+
+    .terminal-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.3);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot.red { background: #ef4444; }
+    .terminal-dot.yellow { background: #f59e0b; }
+    .terminal-dot.green { background: #10b981; }
+
+    .terminal-body {
+      padding: 20px;
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      color: #e5e7eb;
+      line-height: 1.6;
+      overflow: auto;
+      max-height: 400px;
+    }
+
+    .terminal-line {
+      margin: 8px 0;
+    }
+
+    .terminal-prompt {
+      color: var(--accent);
+      font-weight: bold;
+    }
+
+    .terminal-success {
+      color: #34d399;
+    }
+
+    .terminal-info {
+      color: #60a5fa;
+    }
+
+    /* Features Grid */
+    .features {
+      padding: 80px 0;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+
+    .section-header h2 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .section-header p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+    }
+
+    .feature-card {
+      background: rgba(26, 32, 44, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 32px;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -50%;
+      width: 200px;
+      height: 200px;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, transparent 70%);
+      border-radius: 50%;
+      transition: all 0.6s ease;
+    }
+
+    .feature-card:hover {
+      border-color: var(--accent);
+      background: rgba(26, 32, 44, 0.9);
+      transform: translateY(-8px);
+      box-shadow: 0 0 30px rgba(16, 185, 129, 0.15);
+    }
+
+    .feature-card:hover::before {
+      right: -30%;
+      top: -30%;
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 16px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .feature-card h3 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.7;
+      position: relative;
+      z-index: 1;
+    }
+
+    .feature-card ul {
+      margin: 16px 0 0;
+      padding-left: 20px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .feature-card li {
+      color: var(--text-secondary);
+      margin: 8px 0;
+      font-size: 0.95rem;
+    }
+
+    /* Modes Section */
+    .modes {
+      padding: 80px 0;
+    }
+
+    .modes-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+    }
+
+    .mode-card {
+      background: rgba(26, 32, 44, 0.6);
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      padding: 40px;
+      transition: all 0.3s ease;
+      position: relative;
+    }
+
+    .mode-card.deep {
+      border-color: var(--accent);
+      background: rgba(16, 185, 129, 0.05);
+    }
+
+    .mode-card:hover {
+      border-color: var(--accent);
+      background: rgba(16, 185, 129, 0.08);
+      transform: translateY(-8px);
+    }
+
+    .mode-badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-light));
+      border-radius: 999px;
+      color: var(--bg-primary);
+      font-size: 0.75rem;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .mode-card h3 {
+      font-size: 1.8rem;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+
+    .mode-card p {
+      color: var(--text-secondary);
+      font-size: 1rem;
+      line-height: 1.8;
+      margin-bottom: 24px;
+    }
+
+    .code-example {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border-light);
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      color: var(--accent);
+      overflow-x: auto;
+      position: relative;
+    }
+
+    .code-example::before {
+      content: '$ ';
+      color: var(--text-muted);
+    }
+
+    /* Commands Section */
+    .commands {
+      padding: 80px 0;
+    }
+
+    .commands-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 28px;
+    }
+
+    .command-card {
+      background: rgba(26, 32, 44, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 32px;
+      transition: all 0.3s ease;
+    }
+
+    .command-card:hover {
+      border-color: var(--accent);
+      background: rgba(26, 32, 44, 0.9);
+    }
+
+    .command-card h3 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-bottom: 20px;
+      color: var(--text-primary);
+    }
+
+    .command-item {
+      margin-bottom: 12px;
+    }
+
+    .command-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .command-item code {
+      display: block;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent);
+      overflow-x: auto;
+      transition: all 0.3s ease;
+    }
+
+    .command-item:hover code {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: var(--accent);
+    }
+
+    .command-item code::before {
+      content: '$ ';
+      color: var(--text-muted);
+    }
+
+    /* CTA Section */
+    .cta-section {
+      padding: 80px 40px;
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(59, 130, 246, 0.05));
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      text-align: center;
+      margin: 80px 0;
+    }
+
+    .cta-section h2 {
+      font-size: 2rem;
+      font-weight: 800;
+      margin-bottom: 16px;
+    }
+
+    .cta-section p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      margin-bottom: 32px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* Footer */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .hero-content,
+      .modes-grid,
+      .commands-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-text h1 {
+        font-size: 2rem;
+      }
+
+      .cta-buttons {
+        flex-direction: column;
+      }
+
+      .button {
+        width: 100%;
+      }
+
+      nav {
+        gap: 4px;
+        font-size: 0.9rem;
+      }
+
+      nav a {
+        padding: 6px 12px;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .section-header h2 {
+        font-size: 1.8rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="gradient-bg"></div>
+
+  <header>
+    <div class="container">
+      <div class="header-content">
+        <a href="#" class="logo">
+          <div class="logo-icon">⚙</div>
+          <span>depshieldx</span>
+        </a>
+        <nav>
+          <a href="#features">Features</a>
+          <a href="#modes">Modes</a>
+          <a href="#commands">Commands</a>
+          <a href="https://github.com/tee-wealth001/depshieldx">GitHub</a>
+        </nav>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Hero Section -->
+    <section class="hero">
+      <div class="container">
+        <div class="hero-content">
+          <div class="hero-text">
+            <div class="badge">Security-First Package Management</div>
+            <h1>Install Python packages with confidence</h1>
+            <p>depshieldx adds a security gate in front of your package installation. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
+            <div class="cta-buttons">
+              <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
+                <span>Get Started</span>
+                <span>→</span>
+              </a>
+              <a class="button button-secondary" href="#features">Learn More</a>
+            </div>
+          </div>
+          <div class="hero-visual">
+            <div class="terminal-window">
+              <div class="terminal-header">
+                <div class="terminal-dot red"></div>
+                <div class="terminal-dot yellow"></div>
+                <div class="terminal-dot green"></div>
+                <span style="flex: 1; margin-left: 8px; color: var(--text-muted); font-size: 0.9rem;">depshieldx install fastapi --deep</span>
+              </div>
+              <div class="terminal-body">
+                <div class="terminal-line"><span class="terminal-prompt">$</span> depshieldx install fastapi --deep</div>
+                <div class="terminal-line"><span class="terminal-info">→</span> Resolving dependencies for fastapi...</div>
+                <div class="terminal-line"><span class="terminal-success">✓</span> Found 10 package(s)</div>
+                <div class="terminal-line"><span class="terminal-info">→</span> Checking provenance and CVEs...</div>
+                <div class="terminal-line"><span class="terminal-success">✓</span> All checks passed</div>
+                <div class="terminal-line"><span class="terminal-info">→</span> Running Docker sandbox & Trivy scan...</div>
+                <div class="terminal-line"><span class="terminal-success">✓</span> Sandbox passed. Installing...</div>
+                <div class="terminal-line" style="margin-top: 16px; color: var(--accent);">Summary:</div>
+                <div class="terminal-line">  Mode: deep</div>
+                <div class="terminal-line">  Scan verdict: <span class="terminal-success">passed</span></div>
+                <div class="terminal-line">  Provenance: <span class="terminal-success">verified</span></div>
+                <div class="terminal-line">  Receipt: saved ✓</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+      <div class="container">
+        <div class="section-header">
+          <h2>What Makes depshieldx Different</h2>
+          <p>A comprehensive security solution built into your package workflow</p>
+        </div>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <div class="feature-icon">🔍</div>
+            <h3>Deep Dependency Analysis</h3>
+            <p>Resolves and checks your entire dependency tree, not just the package you're installing.</p>
+            <ul>
+              <li>Full resolved package versions</li>
+              <li>PyPI provenance metadata</li>
+              <li>Attestation verification</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">⚠️</div>
+            <h3>Multi-Source Vulnerability Scanning</h3>
+            <p>Queries multiple authoritative sources for security advisories and vulnerabilities.</p>
+            <ul>
+              <li>OSV Database</li>
+              <li>GitHub Advisories</li>
+              <li>CISA KEV Catalog</li>
+              <li>deps.dev</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">🐳</div>
+            <h3>Docker Sandbox Testing</h3>
+            <p>Run installations in an isolated Docker environment before touching your system.</p>
+            <ul>
+              <li>Safe installation testing</li>
+              <li>Trivy deep scanning</li>
+              <li>Zero host impact</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">📝</div>
+            <h3>Signed Receipt Auditing</h3>
+            <p>Every installation is recorded with cryptographic signatures for compliance and review.</p>
+            <ul>
+              <li>Detailed audit trail</li>
+              <li>Signature verification</li>
+              <li>Compliance ready</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">🔄</div>
+            <h3>Flexible Workflows</h3>
+            <p>Works with your existing Python dependency files and tools.</p>
+            <ul>
+              <li>requirements.txt</li>
+              <li>uv.lock & pyproject.toml</li>
+              <li>Direct package names</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">⚡</div>
+            <h3>Two Speed Modes</h3>
+            <p>Choose between fast checks for daily use or deep scans for critical packages.</p>
+            <ul>
+              <li>Fast mode: quick CVE checks</li>
+              <li>Deep mode: full sandbox</li>
+              <li>Flexible per-install</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <!-- ui icon -->
+            <div class="feature-icon">📊</div>
+            <h3>Local Cache UI</h3>
+            <p>Inspect receipts and cached scan data in a browser without sending that data anywhere else.</p>
+            <ul>
+              <li>Local-only on 127.0.0.1</li>
+              <li>Read-only cache views</li>
+              <li>Custom port support</li>
+            </ul>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon">💻</div>
+            <h3>Practical Platform Support</h3>
+            <p>The core install and scan workflow is designed to work across macOS, Linux, and Windows, with platform-specific routing shims where needed.</p>
+            <ul>
+              <li>UI is platform-friendly</li>
+              <li>Routing uses shell or batch shims</li>
+              <li>Deep mode depends on Docker + Trivy</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modes Section -->
+    <section class="modes" id="modes">
+      <div class="container">
+        <div class="section-header">
+          <h2>Operating Modes</h2>
+          <p>Choose the right balance of speed and security for your workflow</p>
+        </div>
+        <div class="modes-grid">
+          <div class="mode-card">
+            <div class="mode-badge">FAST MODE</div>
+            <h3>⚡ Fast Mode</h3>
+            <p>Perfect for your daily development workflow. Resolves dependencies and queries vulnerability databases without the overhead of containerization.</p>
+            <p style="font-size: 0.9rem; color: var(--text-muted);">Checks provenance, CVEs, and package versions in seconds.</p>
+            <div class="code-example">depshieldx install requests --fast</div>
+          </div>
+          <div class="mode-card deep">
+            <div class="mode-badge">DEEP MODE</div>
+            <h3>🔒 Deep Mode</h3>
+            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system.</p>
+            <p style="font-size: 0.9rem; color: var(--text-muted);">Maximum security with full isolation and behavioral analysis.</p>
+            <div class="code-example">depshieldx install requests --deep</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Commands Section -->
+    <section class="commands" id="commands">
+      <div class="container">
+        <div class="section-header">
+          <h2>Common Commands</h2>
+          <p>Easy-to-use CLI for all your packaging needs</p>
+        </div>
+        <div class="commands-grid">
+          <div class="command-card">
+            <h3>Installation & Scanning</h3>
+            <div class="command-item">
+              <code>install requests</code>
+            </div>
+            <div class="command-item">
+              <code>install langchain requests --deep</code>
+            </div>
+            <div class="command-item">
+              <code>scan -r requirements.txt</code>
+            </div>
+            <div class="command-item">
+              <code>scan --pyproject pyproject.toml --deep</code>
+            </div>
+          </div>
+          <div class="command-card">
+            <h3>Receipts & Local UI</h3>
+            <div class="command-item">
+              <code>receipts list</code>
+            </div>
+            <div class="command-item">
+              <code>receipts verify receipt.json</code>
+            </div>
+            <div class="command-item">
+              <code>receipts delete</code>
+            </div>
+            <div class="command-item">
+              <code>ui</code>
+            </div>
+            <div class="command-item">
+              <code>ui --port 8765</code>
+            </div>
+            <div class="command-item">
+              <code>ui --no-open</code>
+            </div>
+          </div>
+          <div class="command-card">
+            <h3>Platform Notes</h3>
+            <div class="command-item">
+              <code>Core path: macOS, Linux, Windows</code>
+            </div>
+            <div class="command-item">
+              <code>UI: local-only at 127.0.0.1</code>
+            </div>
+            <div class="command-item">
+              <code>Routing: shell shim or pip.bat</code>
+            </div>
+            <div class="command-item">
+              <code>Deep mode: Docker + Trivy required</code>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+      <div class="container">
+        <h2>Ready to secure your Python packages?</h2>
+        <p>Join developers who are taking control of their supply chain security. Get started with depshieldx today.</p>
+        <div class="cta-buttons" style="justify-content: center;">
+          <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
+            View on GitHub
+          </a>
+          <a class="button button-secondary" href="https://github.com/tee-wealth001/depshieldx#installation">
+            Installation Docs
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <p>depshieldx • Securing Python's supply chain, one package at a time • Apache License 2.0 • <a href="https://github.com/tee-wealth001/depshieldx" style="color: var(--accent); text-decoration: none;">Source on GitHub</a></p>
+    </div>
+  </footer>
+
+  <script>
+    // Smooth scroll behavior
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+
+    // Header blur on scroll
+    const header = document.querySelector('header');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 10) {
+        header.style.boxShadow = 'var(--shadow-md)';
+      } else {
+        header.style.boxShadow = 'none';
+      }
+    });
+
+    // Animate elements on scroll
+    const observerOptions = {
+      threshold: 0.1,
+      rootMargin: '0px 0px -50px 0px'
+    };
+
+    const observer = new IntersectionObserver(function(entries) {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.style.opacity = '1';
+          entry.target.style.transform = 'translateY(0)';
+        }
+      });
+    }, observerOptions);
+
+    document.querySelectorAll('.feature-card, .mode-card, .command-card').forEach(el => {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(20px)';
+      el.style.transition = 'all 0.6s ease';
+      observer.observe(el);
+    });
+  </script>
+</body>
+</html>

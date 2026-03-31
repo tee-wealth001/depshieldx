@@ -1,0 +1,395 @@
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from depshieldx.cache import CacheEntry
+from depshieldx.sandbox import (
+    REPORT_PREFIX,
+    DownloadBundle,
+    SandboxResult,
+    TEXT_SUBPROCESS_KWARGS,
+    _build_locked_requirements,
+    _docker_daemon_available,
+    _extract_report,
+    _run_command,
+    cleanup_download_bundle,
+    prepare_download_bundle,
+    run_sandbox,
+)
+from depshieldx.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
+
+
+class SandboxHelpersTests(unittest.TestCase):
+    def test_extract_report_reads_prefixed_json_line(self):
+        output = "\n".join(
+            [
+                "some output",
+                REPORT_PREFIX + '{"pip_exit_code": 0, "suspicious": false}',
+                "tail output",
+            ]
+        )
+
+        report = _extract_report(output)
+
+        self.assertEqual(report, {"pip_exit_code": 0, "suspicious": False})
+
+    @patch("depshieldx.sandbox._run_local_sandbox")
+    @patch("depshieldx.sandbox.prepare_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(False, "docker offline"))
+    def test_run_sandbox_falls_back_to_local_backend_when_docker_missing(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_run_local,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/fallback",
+            downloaded_files=["Flask-3.1.3.whl"],
+            artifact_hashes={"Flask-3.1.3.whl": "abc"},
+            requirements_path="/tmp/fallback/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_local.return_value = subprocess.CompletedProcess(
+            args=["python", "sandbox_wrapper.py"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"pip_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+
+        result = run_sandbox("flask", cache_enabled=False)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.error, None)
+        self.assertEqual(result.error_type, None)
+        self.assertEqual(result.isolation["backend"], "local_subprocess")
+        self.assertEqual(result.evidence, {"pip_exit_code": 0, "suspicious": False})
+        mock_run_local.assert_called_once()
+
+    @patch("depshieldx.sandbox.analyze_artifacts", return_value={"blocked": False})
+    @patch("depshieldx.sandbox.download_packages_local")
+    def test_prepare_download_bundle_uses_host_download_for_local_fallback(self, mock_download_local, _mock_analyze):
+        def fake_download(_targets, temp_dir, verbose=False):
+            Path(temp_dir, "Flask-3.1.3-py3-none-any.whl").write_bytes(b"wheel-bytes")
+
+        mock_download_local.side_effect = fake_download
+
+        bundle = prepare_download_bundle(
+            ["Flask==3.1.3"],
+            resolved_versions={"Flask": "3.1.3"},
+            download_via_host=True,
+        )
+
+        self.assertIn("Flask-3.1.3-py3-none-any.whl", bundle.downloaded_files)
+        mock_download_local.assert_called_once()
+        cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.analyze_artifacts")
+    @patch("depshieldx.sandbox.download_packages")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_blocks_on_static_analysis(
+        self,
+        _mock_docker,
+        mock_download,
+        mock_analyze,
+        mock_run_command,
+    ):
+        def fake_download(_package_name, temp_dir, verbose=False):
+            Path(temp_dir, "pkg-0.1.0.tar.gz").write_bytes(b"fake")
+
+        mock_download.side_effect = fake_download
+        mock_analyze.return_value = {
+            "artifacts_scanned": ["pkg-0.1.0.tar.gz"],
+            "finding_count": 1,
+            "high_count": 1,
+            "medium_count": 0,
+            "blocked": True,
+            "findings": [
+                {
+                    "severity": "high",
+                    "code": "install_network_access",
+                    "artifact": "pkg-0.1.0.tar.gz",
+                    "file": "setup.py",
+                    "message": "Install script appears to perform network access.",
+                }
+            ],
+        }
+
+        result = run_sandbox("badpkg")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "static_analysis")
+        self.assertEqual(result.static_analysis["high_count"], 1)
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox.prepare_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(False, "docker offline"))
+    def test_run_sandbox_can_require_docker(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+    ):
+        result = run_sandbox("flask", cache_enabled=False, require_docker=True)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "environment")
+        self.assertEqual(result.isolation["backend"], "docker")
+        mock_prepare_bundle.assert_not_called()
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_sandbox_container")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.prepare_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_can_block_on_trivy(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/deep",
+            downloaded_files=["Flask-3.1.3.whl"],
+            artifact_hashes={"Flask-3.1.3.whl": "abc"},
+            requirements_path="/tmp/deep/depshieldx-lock.txt",
+            static_analysis={"blocked": True, "high_count": 1, "findings": [{"code": "install_subprocess"}]},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"pip_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {
+            "should_block": True,
+            "vulnerabilities": [{"id": "CVE-2026-1234", "severity": "HIGH"}],
+            "warnings": [],
+            "scanned": True,
+        }
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+        result = run_sandbox(
+            "flask",
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "trivy")
+        self.assertEqual(result.trivy_results["vulnerabilities"][0]["id"], "CVE-2026-1234")
+
+    @patch("depshieldx.sandbox.load_cache_entry")
+    @patch("depshieldx.sandbox.prepare_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_reuses_cached_bundle(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_load_cache,
+    ):
+        fresh_bundle = DownloadBundle(
+            temp_dir="/tmp/fresh",
+            downloaded_files=["Flask-3.1.3.whl"],
+            artifact_hashes={"Flask-3.1.3.whl": "abc"},
+            requirements_path="/tmp/fresh/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = fresh_bundle
+        mock_load_cache.return_value = CacheEntry(
+            fingerprint="fingerprint123",
+            path="/tmp/cache/fingerprint123",
+            metadata={
+                "downloaded_files": ["Flask-3.1.3.whl"],
+                "artifact_hashes": {"Flask-3.1.3.whl": "abc"},
+                "static_analysis": {"blocked": False},
+                "success": True,
+                "error": None,
+                "error_type": None,
+                "evidence": {"pip_exit_code": 0, "suspicious": False},
+            },
+        )
+
+        result = run_sandbox("flask", keep_bundle=True, cache_enabled=True)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.cache, {"hit": True, "fingerprint": "fingerprint123"})
+        self.assertEqual(result.bundle.temp_dir, "/tmp/cache/fingerprint123")
+
+    def test_build_locked_requirements_creates_hash_pinned_entries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = Path(temp_dir) / "Flask-3.1.3-py3-none-any.whl"
+            wheel.write_bytes(b"wheel-bytes")
+
+            requirements_path, artifact_hashes = _build_locked_requirements(
+                temp_dir,
+                {"Flask": "3.1.3"},
+            )
+
+            requirements_text = Path(requirements_path).read_text()
+
+        self.assertIn("flask==3.1.3 --hash=sha256:", requirements_text)
+        self.assertIn("Flask-3.1.3-py3-none-any.whl", artifact_hashes)
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_run_command_captures_output_by_default(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["pip", "download"],
+            returncode=0,
+            stdout="downloaded\n",
+            stderr="",
+        )
+
+        result = _run_command(["pip", "download"])
+
+        self.assertEqual(result.stdout, "downloaded\n")
+        mock_run.assert_called_once_with(
+            ["pip", "download"],
+            check=True,
+            capture_output=True,
+            **TEXT_SUBPROCESS_KWARGS,
+        )
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_docker_daemon_available_uses_tolerant_utf8_decoding(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "info"],
+            returncode=0,
+            stdout="Server:\n",
+            stderr="",
+        )
+
+        available, detail = _docker_daemon_available()
+
+        self.assertTrue(available)
+        self.assertIsNone(detail)
+        mock_run.assert_called_once_with(
+            ["docker", "info"],
+            check=True,
+            capture_output=True,
+            **TEXT_SUBPROCESS_KWARGS,
+        )
+
+
+class EvidenceCollectorTests(unittest.TestCase):
+    def test_create_target_dir_uses_platform_temp_root(self):
+        target_dir = _create_target_dir()
+        try:
+            self.assertTrue(Path(target_dir).exists())
+            self.assertIn(Path(tempfile.gettempdir()), Path(target_dir).parents)
+        finally:
+            Path(target_dir).rmdir()
+
+    def test_temp_root_probe_paths_are_allowed(self):
+        self.assertTrue(_is_allowed_write_path("/tmp/random-temp-probe"))
+        self.assertTrue(_is_allowed_write_path("/private/tmp/random-temp-probe"))
+        self.assertTrue(_is_allowed_write_path("/var/tmp/random-temp-probe"))
+        self.assertTrue(_is_allowed_write_path("/usr/tmp/random-temp-probe"))
+        self.assertTrue(_is_allowed_write_path("/dev/null"))
+        self.assertFalse(_is_allowed_write_path("/etc/random-temp-probe"))
+
+    def test_evidence_collector_summarizes_writes_and_events(self):
+        collector = EvidenceCollector()
+        collector.add_event("write_attempt", {"path": "/tmp/pip-target-123/lib/python/pkg/a.py", "mode": "wb"})
+        collector.add_event("write_attempt", {"path": "/tmp/pip-target-123/bin/tool", "mode": "wb"})
+        collector.add_event("write_attempt", {"path": "/tmp/pip-target-123/lib/python/pkg/native.so", "mode": "wb"})
+        collector.add_event("syscall:filesystem_mutation", {"call": "os.rename", "path": "/tmp/pip-target-123/lib/python/pkg/a.py"})
+        collector.add_event("syscall:process_exec", {"call": "subprocess.Popen", "command": ["uname", "-rs"]})
+        collector.add_event("subprocess_allowed", {"command": ["uname", "-rs"]})
+        collector.add_event("import_ok", {"module": "flask"})
+        collector.add_event("import_skipped", {"module": "markupsafe", "reason": "native_extension_distribution"})
+        collector.add_event("import_failed", {"module": "badpkg", "type": "ImportError", "message": "boom"})
+        collector.add_blocked("subprocess_denied", {"command": ["curl", "http://x"]})
+
+        report = collector.report(1)
+
+        self.assertEqual(report["write_count"], 3)
+        self.assertEqual(
+            report["write_samples"],
+            [
+                "/tmp/pip-target-123/lib/python/pkg/a.py",
+                "/tmp/pip-target-123/bin/tool",
+                "/tmp/pip-target-123/lib/python/pkg/native.so",
+            ],
+        )
+        self.assertEqual(report["write_buckets"]["package_files"], 1)
+        self.assertEqual(report["write_buckets"]["entrypoint_scripts"], 1)
+        self.assertEqual(report["write_buckets"]["native_extensions"], 1)
+        self.assertEqual(report["syscall_counts"]["filesystem_mutation"], 1)
+        self.assertEqual(report["syscall_counts"]["process_exec"], 1)
+        self.assertEqual(
+            report["syscall_samples"][0],
+            {
+                "category": "syscall:filesystem_mutation",
+                "detail": {"call": "os.rename", "path": "/tmp/pip-target-123/lib/python/pkg/a.py"},
+            },
+        )
+        self.assertEqual(report["allowed_subprocesses"], [["uname", "-rs"]])
+        self.assertEqual(report["imported_modules"], ["flask"])
+        self.assertEqual(report["skipped_imports"], [{"module": "markupsafe", "reason": "native_extension_distribution"}])
+        self.assertEqual(report["import_failures"][0]["module"], "badpkg")
+        self.assertEqual(report["blocked_events"][0]["category"], "subprocess_denied")
+        self.assertTrue(report["suspicious"])
+        verdict_codes = [verdict["code"] for verdict in report["verdicts"]]
+        self.assertIn("unexpected_subprocess_blocked", verdict_codes)
+        self.assertIn("native_extensions_present", verdict_codes)
+        self.assertIn("entrypoint_scripts_created", verdict_codes)
+        self.assertIn("post_install_import_failures", verdict_codes)
+        self.assertIn("post_install_import_checks_run", verdict_codes)
+        self.assertIn("filesystem_mutations_traced", verdict_codes)
+
+    def test_evidence_collector_treats_shared_library_mapping_failures_as_environmental(self):
+        collector = EvidenceCollector()
+        collector.add_event(
+            "import_failed",
+            {
+                "module": "fastapi",
+                "type": "ImportError",
+                "message": "/tmp/site-packages-x/pydantic_core.so: failed to map segment from shared object",
+            },
+        )
+
+        report = collector.report(0)
+
+        self.assertEqual(len(report["risky_import_failures"]), 0)
+        self.assertEqual(len(report["environmental_import_failures"]), 1)
+        verdict_codes = [verdict["code"] for verdict in report["verdicts"]]
+        self.assertNotIn("post_install_import_failures", verdict_codes)
+        self.assertIn("post_install_import_environment_limitations", verdict_codes)
+
+    def test_discover_import_targets_skips_native_distributions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            site_packages = Path(temp_dir)
+
+            flask_dist = site_packages / "flask-3.1.3.dist-info"
+            flask_dist.mkdir()
+            (flask_dist / "top_level.txt").write_text("flask\n")
+            (flask_dist / "RECORD").write_text("flask/__init__.py,,\n")
+
+            markupsafe_dist = site_packages / "markupsafe-3.0.3.dist-info"
+            markupsafe_dist.mkdir()
+            (markupsafe_dist / "top_level.txt").write_text("markupsafe\n")
+            (markupsafe_dist / "RECORD").write_text("markupsafe/_speedups.so,,\n")
+
+            targets, skipped = _discover_import_targets(temp_dir, "Flask")
+
+        self.assertEqual(targets, ["flask"])
+        self.assertEqual(
+            skipped,
+            [{"module": "markupsafe", "reason": "native_extension_distribution"}],
+        )

@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "depshieldx"
+version = "0.1.0"
+description = "Safer Python package install and scan tool with provenance checks, CVE lookups, Docker + Trivy deep mode, and signed receipts"
+authors = [
+    { name="Stephen Toriola", email="stephenola21@gmail.com" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11.4"
+keywords = ["security", "pypi", "pip", "supply-chain", "provenance", "trivy", "receipts"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Installation/Setup",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "click",
+    "requests>=2.32.4",
+    "aiohttp>=3.12.14",
+    "packaging",
+    "pypi-attestations>=0.0.28"
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2.2",
+    "twine>=6.1.0",
+    "pytest>=8.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/tee-wealth001/depshieldx"
+Documentation = "https://tee-wealth001.github.io/depshieldx/"
+Repository = "https://github.com/tee-wealth001/depshieldx"
+Issues = "https://github.com/tee-wealth001/depshieldx/issues"
+
+[project.scripts]
+depshieldx = "depshieldx.cli:cli"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["depshieldx*"]
