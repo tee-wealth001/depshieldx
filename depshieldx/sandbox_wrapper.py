@@ -31,6 +31,10 @@ TEMP_ROOT_PREFIXES = (
 )
 ALLOWED_DEVICE_WRITE_PATHS = {
     "/dev/null",
+    # os.path.abspath(os.devnull) on Windows -- the platform's equivalent of /dev/null, needed
+    # for the same subprocess.DEVNULL piping pattern (e.g. CPython <3.12's platform.win32_ver()
+    # opens it for stdin/stderr when shelling out to "ver").
+    "\\\\.\\nul",
 }
 SUSPICIOUS_AUDIT_EVENTS = {
     "subprocess.Popen",
@@ -57,6 +61,11 @@ ALLOWED_SUBPROCESS_PREFIXES = {
     # (observed on every OS, before any package-specific processing begins), independent of
     # whether the package being installed actually needs one.
     ("rustc", "--version"),
+    # CPython <3.12's platform.win32_ver() shells out to "ver" (via `shell=True`, so Popen sees
+    # the bare string) to read the Windows version for pip's truststore SSL setup. Blocking it
+    # doesn't just get flagged like the rustc probe above -- it crashes pip's SSL context setup
+    # outright on Windows + Python <3.12. CPython 3.12+ no longer uses this subprocess path.
+    ("ver",),
 }
 WRITE_BUCKET_KEYS = (
     "package_files",
