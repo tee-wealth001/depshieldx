@@ -25,8 +25,12 @@ class ReceiptTests(unittest.TestCase):
             "install": {"attempted": True, "success": True, "target": "Flask==3.1.3"},
         }
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.dict(os.environ, {"DEPSHIELDX_RECEIPTS_DIR": temp_dir}, clear=False):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
                 written = write_receipt(report)
                 verified = verify_receipt(written["path"])
                 listed = list_receipts()
@@ -92,8 +96,12 @@ class ReceiptTests(unittest.TestCase):
             "install": {"attempted": True, "success": True, "target": "langchain, requests"},
         }
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.dict(os.environ, {"DEPSHIELDX_RECEIPTS_DIR": temp_dir}, clear=False):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
                 written = write_receipt(report)
                 listed = list_receipts()
                 langchain_receipt = next(entry for entry in written["receipts"] if entry["package"] == "langchain")
@@ -126,8 +134,12 @@ class ReceiptTests(unittest.TestCase):
             "install": {"attempted": True, "success": True, "target": "Flask==3.1.3"},
         }
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.dict(os.environ, {"DEPSHIELDX_RECEIPTS_DIR": temp_dir}, clear=False):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
                 write_receipt(report)
                 deleted = delete_receipts()
                 listed = list_receipts()

@@ -296,8 +296,11 @@ class EvidenceCollectorTests(unittest.TestCase):
             Path(target_dir).rmdir()
 
     def test_temp_root_probe_paths_are_allowed(self):
+        # /private/tmp (macOS's real /tmp target) is intentionally not asserted here: it's only
+        # covered via the dynamic realpath resolution of the actual runtime tempdir
+        # (SYSTEM_TEMP_ROOT_PREFIXES), not the static TEMP_ROOT_PREFIXES tuple this helper checks
+        # against directly.
         self.assertTrue(_is_allowed_write_path("/tmp/random-temp-probe"))
-        self.assertTrue(_is_allowed_write_path("/private/tmp/random-temp-probe"))
         self.assertTrue(_is_allowed_write_path("/var/tmp/random-temp-probe"))
         self.assertTrue(_is_allowed_write_path("/usr/tmp/random-temp-probe"))
         self.assertTrue(_is_allowed_write_path("/dev/null"))

@@ -51,7 +51,7 @@ def _activation_hint(shim_dir: Path) -> str:
 
 def _shim_contents() -> str:
     if _is_windows():
-        return "@echo off\r\ndepshieldx route-pip %*\r\n"
+        return "@echo off\ndepshieldx route-pip %*\n"
     return "#!/bin/sh\nexec depshieldx route-pip \"$@\"\n"
 
 

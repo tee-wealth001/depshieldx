@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depshieldx"
-version = "0.1.1"
+version = "0.1.2"
 description = "Safer Python package install and scan tool with provenance checks, CVE lookups, Docker + Trivy deep mode, and signed receipts"
 authors = [
     { name="Stephen Toriola", email="stephenola21@gmail.com" }

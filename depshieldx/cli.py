@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 from urllib.parse import quote, unquote, urlparse
+from urllib.request import url2pathname
 import click
 from packaging.version import InvalidVersion, Version
 import requests
@@ -805,7 +806,7 @@ def _copy_or_download_artifact(artifact, destination: Path):
     parsed = urlparse(url)
 
     if parsed.scheme in {"", "file"}:
-        source_path = Path(unquote(parsed.path if parsed.scheme == "file" else url)).expanduser()
+        source_path = Path(url2pathname(parsed.path) if parsed.scheme == "file" else unquote(url)).expanduser()
         if not source_path.exists():
             raise RuntimeError(f"selected artifact path does not exist: {source_path}")
         shutil.copy2(source_path, destination_path)

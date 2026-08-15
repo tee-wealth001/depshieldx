@@ -11,20 +11,21 @@ class RoutingTests(unittest.TestCase):
     def test_enable_routing_writes_posix_shim(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": temp_dir}, clear=False):
-                status = enable_routing()
-                shim_path = Path(status["shim_path"])
+                with patch("depshieldx.routing._is_windows", return_value=False):
+                    status = enable_routing()
+                    shim_path = Path(status["shim_path"])
 
-                self.assertTrue(status["enabled"])
-                self.assertEqual(shim_path.name, "pip")
-                self.assertTrue(shim_path.exists())
-                self.assertEqual(
-                    shim_path.read_text(),
-                    "#!/bin/sh\nexec depshieldx route-pip \"$@\"\n",
-                )
-                self.assertEqual(
-                    status["activation_hint"],
-                    f'export PATH="{shim_path.parent}:$PATH"',
-                )
+                    self.assertTrue(status["enabled"])
+                    self.assertEqual(shim_path.name, "pip")
+                    self.assertTrue(shim_path.exists())
+                    self.assertEqual(
+                        shim_path.read_text(),
+                        "#!/bin/sh\nexec depshieldx route-pip \"$@\"\n",
+                    )
+                    self.assertEqual(
+                        status["activation_hint"],
+                        f'export PATH="{shim_path.parent}:$PATH"',
+                    )
 
     def test_enable_routing_writes_windows_batch_shim(self):
         with tempfile.TemporaryDirectory() as temp_dir:
