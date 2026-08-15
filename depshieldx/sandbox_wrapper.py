@@ -53,6 +53,10 @@ ALLOWED_SUBPROCESS_PREFIXES = {
     ("lsb_release", "-a"),
     ("uname", "-rs"),
     ("uname", "-m"),
+    # pip itself probes for a Rust toolchain unconditionally at the start of every install
+    # (observed on every OS, before any package-specific processing begins), independent of
+    # whether the package being installed actually needs one.
+    ("rustc", "--version"),
 }
 WRITE_BUCKET_KEYS = (
     "package_files",
