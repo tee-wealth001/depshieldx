@@ -36,7 +36,8 @@ dependencies = [
     "requests>=2.32.4",
     "aiohttp>=3.12.14",
     "packaging",
-    "pypi-attestations>=0.0.28"
+    "pypi-attestations>=0.0.28",
+    "PyYAML>=6.0"
 ]
 
 [project.optional-dependencies]
