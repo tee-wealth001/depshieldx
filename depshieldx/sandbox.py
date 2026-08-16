@@ -19,7 +19,12 @@ from .runtime import pip_command, resource_path, system_python_executable
 from .trivy import scan_filesystem
 
 DOCKER_IMAGE = "python:3.11"
-NODE_DOCKER_IMAGE = "node:20"
+# Built locally from docker/npm_sandbox.Dockerfile (node:20 + strace) the
+# first time npm deep mode runs -- plain node:20 has no strace (confirmed
+# directly: `which strace` -> not found), and the sandbox container's
+# rootfs runs --read-only, so it can't be apt-get installed at container
+# run time either. No external registry involved.
+NPM_SANDBOX_IMAGE_TAG = "depshieldx-npm-sandbox:node20"
 SANDBOX_USER = "65534:65534"
 
 
@@ -189,6 +194,32 @@ def _docker_daemon_available() -> tuple[bool, Optional[str]]:
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or str(exc)).strip()
         return False, f"Docker daemon unavailable: {detail}"
+
+
+def _ensure_npm_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's node:20 + strace image if it isn't already
+    present locally. `docker build` is a no-op-fast if the image (and its
+    layers) already exist, but `docker image inspect` avoids even that
+    overhead on the common case."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", NPM_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("docker/npm_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        NPM_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
 
 
 def _run_local_sandbox(bundle: DownloadBundle, install_targets: list[str], verbose: bool) -> subprocess.CompletedProcess:
@@ -381,7 +412,7 @@ def run_sandbox(
     before the fallback branch is ever taken, for either ecosystem.
     """
     is_npm = ecosystem.name == "npm"
-    docker_image = NODE_DOCKER_IMAGE if is_npm else DOCKER_IMAGE
+    docker_image = NPM_SANDBOX_IMAGE_TAG if is_npm else DOCKER_IMAGE
     if isinstance(install_targets, str):
         install_targets = [install_targets]
     else:
@@ -523,6 +554,17 @@ def run_sandbox(
                 # directly against a real container. /tmp is the one writable
                 # path (the tmpfs mount below), so point HOME there.
                 env_args = ["-e", "HOME=/tmp"]
+                # No --cap-add SYS_PTRACE needed: strace here only traces
+                # its own direct child process tree (npm -> node -> lifecycle
+                # scripts), and a process can always ptrace its own
+                # descendants regardless of capabilities or ptrace_scope --
+                # CAP_SYS_PTRACE is only required to trace *unrelated*
+                # processes. Verified directly under the full --cap-drop ALL
+                # posture (no capabilities added back at all): strace still
+                # traced a real multi-generation fork tree (npm -> node ->
+                # sh -c -> node) and caught a real network exfiltration
+                # attempt from a postinstall script without it.
+                _ensure_npm_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",
