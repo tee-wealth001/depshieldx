@@ -151,7 +151,7 @@ def fetch_all_sources_for_packages(
 
         if version:
             for vuln in osv_vulns:
-                if vuln.is_current_version_vulnerable(version):
+                if vuln.is_current_version_vulnerable(version, ecosystem=ecosystem):
                     osv_current.append(vuln.to_dict())
                 else:
                     osv_historical.append(vuln.to_dict())
