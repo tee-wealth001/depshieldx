@@ -38,10 +38,13 @@ def resolve_node_tool(name: str) -> str:
 
 
 class NpmEcosystem:
-    """The npm/yarn/pnpm ecosystem adapter (Phase 1, fast mode).
+    """The npm/yarn/pnpm ecosystem adapter.
 
-    Provenance checks are structural only -- see npm_registry.py's module
-    docstring for why full Sigstore bundle verification isn't done here yet.
+    Provenance checks include real cryptographic Sigstore bundle
+    verification (SLSA provenance attestations, via the generic `sigstore`
+    package) where available -- see npm_registry.py's module docstring for
+    the exact trust model and its limits (npm's own "publish" attestation
+    uses a different, non-Fulcio trust model that isn't verified here).
 
     npm itself is a separate runtime (Node.js) -- unlike pip, this has
     nothing to do with depshieldx's own frozen/non-frozen state, so

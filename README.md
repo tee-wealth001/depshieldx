@@ -30,13 +30,13 @@ Project links:
 ## What It Does
 
 - resolves the full dependency set before installation, for PyPI or npm/yarn/pnpm
-- checks provenance for the selected release artifacts (PyPI attestations, or structural npm registry signals)
+- checks provenance for the selected release artifacts (PyPI attestations, or npm's SLSA provenance attestations -- both verified cryptographically via real Sigstore bundle verification, not just presence checks)
 - queries 4 vulnerability sources for the resolved package versions:
   - OSV
   - GitHub Advisories
   - CISA KEV
   - deps.dev
-- supports a deeper Docker + Trivy scan mode (PyPI only for now)
+- supports a deeper Docker + Trivy scan mode, plus real syscall-level behavioral tracing during sandboxed installs, for both PyPI and npm/yarn/pnpm
 - writes signed local receipts for installs and scans
 
 ## Quick Start
@@ -106,7 +106,7 @@ Windows support is improving, but macOS and Linux still have the broadest day-to
 
 Plain `install` and plain `scan` default to `fast`.
 
-`deep` is PyPI-only right now -- passing `--deep` with npm/yarn/pnpm input (`--ecosystem npm` or an npm-family lockfile) is rejected with a clear error rather than silently running fast mode instead.
+`deep` is supported for both PyPI and npm/yarn/pnpm input.
 
 ### Fast mode
 
@@ -129,7 +129,9 @@ Deep mode does everything in fast mode first, then:
 
 For `install --deep`, the host install only happens after the fast checks and the Docker + Trivy stage both pass.
 
-`depshieldx` shells out to the local `pip` for resolution, download, and host install steps, so keeping `pip` up to date is part of the security model.
+`depshieldx` shells out to the local `pip` (or, for npm, the local `npm`) for resolution, download, and host install steps, so keeping those tools up to date is part of the security model.
+
+For PyPI, deep mode also traces filesystem writes, subprocess launches, and network access in-process during the sandboxed install (via `sys.addaudithook`) and actively blocks disallowed ones in real time. For npm, which has no equivalent in-process hook, behavioral tracing instead wraps the sandboxed `npm install` in `strace`, observing the same categories of activity across the whole install (including lifecycle scripts) rather than blocking individual syscalls live -- filesystem/network isolation is still enforced by the container itself either way. The npm sandbox runs in a small `node:20` + `strace` image `depshieldx` builds and caches locally the first time it's needed.
 
 ## Install vs Scan
 
@@ -150,7 +152,7 @@ This same behavior applies to:
 
 ## npm / yarn / pnpm Support
 
-`depshieldx` can resolve, check, and install npm packages too, in fast mode only.
+`depshieldx` can resolve, check, and install npm packages too, with full fast and deep mode support.
 
 Two ways to point it at npm:
 
@@ -175,11 +177,10 @@ Bare package-name resolution shells out to the real `npm` CLI in an isolated tem
 
 If you have the [routing shim](#routing) enabled, `npm install <package>` is also intercepted automatically and routed through `depshieldx install <package> --ecosystem npm` -- you don't need to change your muscle memory.
 
-What's explicitly **not** supported yet for npm/yarn/pnpm:
+npm/yarn/pnpm now has full functional parity with PyPI: `--deep` (Docker + Trivy + real behavioral tracing via strace), `depshieldx uninstall`, and cryptographic provenance verification (real Sigstore bundle verification of npm's SLSA provenance attestations, not just presence checks -- see [Provenance And Attestations](#provenance-and-attestations)) are all supported.
 
-- `--deep` (Docker + Trivy) -- fast mode only; `--deep` is rejected with a clear error rather than silently downgrading
-- `depshieldx uninstall` -- also rejected with a clear error
-- cryptographic provenance verification -- npm provenance checks are structural only (attestation presence, deprecation status, homepage/contact metadata), not full Sigstore bundle verification the way PyPI attestations are checked; see [Provenance And Attestations](#provenance-and-attestations)
+What's still explicitly **not** supported for npm/yarn/pnpm:
+
 - `requirements.txt`/`pyproject.toml`-style inputs -- those formats are inherently PyPI-specific; use a lockfile or `--ecosystem npm` instead
 
 ## Commands
@@ -399,9 +400,9 @@ For multi-package installs, the summary also includes:
 
 ## Provenance And Attestations
 
-The provenance stage checks the exact artifacts selected for your environment, not every file on the PyPI release page.
+The provenance stage checks the exact artifacts selected for your environment, not every file on the release page.
 
-It currently looks at things like:
+For PyPI, it looks at things like:
 
 - whether the release exists on PyPI
 - whether the release is source-only
@@ -409,7 +410,16 @@ It currently looks at things like:
 - whether homepage/project URLs exist
 - whether author or maintainer email metadata exists
 - whether the selected files have PyPI attestations
-- whether those attestations verify successfully
+- whether those attestations verify successfully (a real Sigstore bundle check, not just presence)
+
+For npm/yarn/pnpm, it looks at:
+
+- whether the release is deprecated
+- whether homepage/repository and author/maintainer metadata exist
+- whether the resolved release has an integrity digest
+- whether the release has npm provenance attestations, and whether its SLSA provenance attestation (the one signed via GitHub Actions OIDC through a real Fulcio certificate) verifies successfully -- npm's separate "publish" attestation, signed with npm registry's own key rather than a Fulcio certificate, is recorded but not cryptographically verified here, since that's a different trust model
+
+Either way, a block only happens when verification was actually attempted and failed -- not attestations being absent at all, since most packages on both registries don't publish them.
 
 ## Vulnerability Sources
 
@@ -518,14 +528,14 @@ depshieldx ui
 
 ## Limitations
 
-- deep mode depends on Docker being available
+- deep mode depends on Docker being available (for npm, a small local `node:20` + `strace` image is built on first use -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support))
 - deep mode also depends on Trivy being installed
 - deep mode is slower than fast mode
-- deep mode and `uninstall` are PyPI-only right now; both are rejected with a clear error for npm/yarn/pnpm input rather than silently skipped
+- npm's behavioral tracing (Docker deep mode) observes syscalls via `strace` rather than actively blocking them in real time the way PyPI's in-process guards do; filesystem/network isolation is still enforced by the container itself either way
 - the safety guarantees depend in part on the local Python and `pip` versions
-- some packages publish no PyPI attestations; that is usually informational
+- some packages publish no PyPI or npm attestations at all; that is usually informational, not a red flag
 - attestation verification can depend on upstream trust metadata availability
-- npm provenance checks are structural only (no cryptographic Sigstore bundle verification yet), see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support)
+- npm's own "publish" attestation (signed with npm registry's own key, not a Fulcio certificate) is recorded structurally but not cryptographically verified -- only npm's SLSA provenance attestation is, since that's the one signed via GitHub Actions OIDC the same way PyPI's Trusted Publishing attestations are
 - vulnerability-source coverage depends on the upstream services
 
 ## FAQ
