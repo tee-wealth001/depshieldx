@@ -3,9 +3,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/depshieldx.svg)](https://pypi.org/project/depshieldx/)
 [![Docs](https://img.shields.io/badge/docs-github%20pages-10b981)](https://tee-wealth001.github.io/depshieldx/)
 
-`depshieldx` is a safer wrapper around package install and scan workflows. PyPI (Python) is the primary, most complete ecosystem; npm/yarn/pnpm (JavaScript) support is available in fast mode with a narrower scope -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support) for exactly what is and isn't covered yet.
+`depshieldx` is a safer wrapper around package install and scan workflows, for both PyPI (Python) and npm/yarn/pnpm (JavaScript) -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support) for the npm-specific details.
 
-Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and (for PyPI) can optionally run a deeper Docker + Trivy validation path. Every completed install or scan also writes signed local receipt JSON files.
+Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and can optionally run a deeper Docker + Trivy validation path with real behavioral tracing of the sandboxed install. Every completed install or scan also writes signed local receipt JSON files.
 
 ## Installation
 
@@ -20,6 +20,16 @@ If your machine has multiple Python versions, use a Python `3.11.4+` interpreter
 ```bash
 python3.11 -m pip install depshieldx
 ```
+
+### Standalone binaries (no Python runtime required to run `depshieldx` itself)
+
+Each [GitHub Release](https://github.com/tee-wealth001/depshieldx/releases) also includes a standalone binary per platform (Windows x64, macOS x64/arm64, Linux x64) built with PyInstaller. Download it, put it on `PATH`, and run it directly -- no `pip install` and no separate Python interpreter needed just to launch `depshieldx`.
+
+That said, `depshieldx` doesn't reimplement `pip` or `npm` -- it wraps the real tools for actually resolving and installing packages, in either distribution:
+
+- Using it against **PyPI** packages still requires a real Python + `pip` on the host, standalone binary or not. If the binary can't find one on `PATH`, it fails with a clear error rather than doing something unsafe.
+- Using it against **npm/yarn/pnpm** packages only requires Node.js/`npm` on the host -- no Python needed at all, in either distribution.
+- **Deep mode**, for either ecosystem, additionally requires Docker.
 
 Project links:
 
@@ -234,7 +244,7 @@ For a release build:
 - run `python -m build`
 - run `python -m twine check dist/*`
 - for TestPyPI, run the `Release Checks` workflow manually
-- for PyPI, push a version tag such as `v0.1.0`
+- for PyPI, push a version tag such as `v0.1.0` -- this also triggers the `Release Binaries` workflow, which builds and attaches the standalone per-platform binaries to the matching GitHub Release
 
 ## Common Examples
 
