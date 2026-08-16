@@ -17,7 +17,58 @@ from urllib.parse import quote, urljoin
 from packaging.version import Version, InvalidVersion
 from packaging.specifiers import SpecifierSet
 import aiohttp
+import nodesemver
 import requests
+
+# operator prefix -> nodesemver comparator, used to evaluate the ">=X,<Y"-style
+# range clauses built below against npm (semver) versions instead of PyPI
+# (PEP 440) ones -- see VersionVulnerability.is_current_version_vulnerable's
+# npm branch. Longer prefixes must be checked before their shorter substrings
+# (">=" before ">") when parsing, hence the ordered lookup in
+# _npm_satisfies_clause rather than a plain dict scan.
+_NPM_COMPARATORS = {
+    ">=": nodesemver.gte,
+    "<=": nodesemver.lte,
+    ">": nodesemver.gt,
+    "<": nodesemver.lt,
+    "==": nodesemver.eq,
+}
+
+
+def _npm_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using semver
+    (not PEP 440) ordering. A bare version with no operator prefix (npm's
+    exact-match fallback, see the "==" version list built in
+    _async_fetch_osv_cves_inner) is treated as an exact match.
+
+    Deliberately does NOT use nodesemver's own Range/satisfies() -- those
+    implement npm's dependency-resolution-specific "a prerelease version
+    only satisfies a range whose boundary shares its exact [major, minor,
+    patch] tuple" rule, which would silently exclude real prerelease
+    versions from vulnerability ranges (a false negative) rather than
+    doing the plain ordering comparison a security check needs.
+    """
+    clause = clause.strip()
+    # Longer prefixes first so ">=" isn't mistaken for ">". A clause with no
+    # recognized operator prefix is npm's exact-match fallback (see the "=="
+    # version list built in _async_fetch_osv_cves_inner's `versions` branch --
+    # bare there too, "==" is just this module's own PyPI-oriented spelling
+    # of "exact match").
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    if not nodesemver.valid(boundary, False):
+        return False
+    return _NPM_COMPARATORS[operator](version, boundary, False)
+
+
+def _npm_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_npm_satisfies_clause(version, clause) for clause in spec.split(","))
 
 # Source names for reporting
 SOURCES = {
@@ -97,10 +148,25 @@ class VersionVulnerability:
         self.summary = summary
         self.aliases = aliases or []
 
-    def is_current_version_vulnerable(self, version: str) -> bool:
-        """Check if a specific version is affected by this vulnerability."""
+    def is_current_version_vulnerable(self, version: str, ecosystem: str = "pypi") -> bool:
+        """Check if a specific version is affected by this vulnerability.
+
+        `affected_versions`/`fixed_in_version` are built by this module as
+        ">=X,<Y"-style comparator strings regardless of ecosystem (see
+        _async_fetch_osv_cves_inner) -- only the *comparison engine* differs
+        below, not that string format. npm uses semver ordering (nodesemver),
+        not PEP 440/PyPI's -- see findings.md #11 for why this matters:
+        PEP 440 silently mis-orders some real npm prerelease versions (e.g.
+        "1.2.3-0" sorts as a *post*-release under PEP 440's normalization,
+        the opposite of semver's pre-release ordering) and outright rejects
+        others (e.g. "1.0.0-x.7.z.92"), both of which previously caused this
+        check to silently under- or over-report npm vulnerabilities.
+        """
         if not self.affected_versions and not self.fixed_in_version:
             return True  # Unknown range, assume vulnerable
+
+        if ecosystem == "npm":
+            return self._is_current_version_vulnerable_npm(version)
 
         try:
             check_version = Version(version)
@@ -123,6 +189,26 @@ class VersionVulnerability:
                 if check_version < fixed_version:
                     return True
             except InvalidVersion:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_npm(self, version: str) -> bool:
+        if not nodesemver.valid(version, False):
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the PyPI branch above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _npm_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version and nodesemver.valid(self.fixed_in_version, False):
+            try:
+                if nodesemver.lt(version, self.fixed_in_version, False):
+                    return True
+            except Exception:
                 pass
 
         return False
@@ -667,7 +753,7 @@ def fetch_all_sources_for_packages(
         
         if version:
             for vuln in osv_vulns:
-                if vuln.is_current_version_vulnerable(version):
+                if vuln.is_current_version_vulnerable(version, ecosystem=ecosystem):
                     osv_current.append(vuln.to_dict())
                 else:
                     osv_historical.append(vuln.to_dict())
