@@ -68,7 +68,7 @@ include-package-data = true
 include = ["depshieldx*"]
 
 [tool.setuptools.package-data]
-depshieldx = ["presentation/web/templates/*.html"]
+depshieldx = ["presentation/web/templates/*.html", "sandbox_wrapper_npm.js"]
 
 [tool.pytest.ini_options]
 markers = [

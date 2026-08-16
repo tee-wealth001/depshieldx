@@ -1,11 +1,16 @@
+import io
+import os
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from depshieldx.cache import CacheEntry
+from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.sandbox import (
+    NODE_DOCKER_IMAGE,
     REPORT_PREFIX,
     DownloadBundle,
     SandboxResult,
@@ -14,8 +19,10 @@ from depshieldx.sandbox import (
     _docker_daemon_available,
     _extract_report,
     _run_command,
+    _sandbox_cache_fingerprint,
     cleanup_download_bundle,
     prepare_download_bundle,
+    prepare_npm_download_bundle,
     run_sandbox,
 )
 from depshieldx.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
@@ -141,7 +148,7 @@ class SandboxHelpersTests(unittest.TestCase):
         mock_prepare_bundle.assert_not_called()
 
     @patch("depshieldx.sandbox.subprocess.run")
-    @patch("depshieldx.sandbox._scan_sandbox_container")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
     @patch("depshieldx.sandbox._run_command")
     @patch("depshieldx.sandbox.prepare_download_bundle")
     @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
@@ -286,6 +293,97 @@ class SandboxHelpersTests(unittest.TestCase):
         )
 
 
+class NpmSandboxTests(unittest.TestCase):
+    def test_prepare_npm_download_bundle_fetches_and_hashes_artifacts(self):
+        fake_ecosystem = unittest.mock.Mock()
+        fake_ecosystem.selected_artifact_entries.return_value = [
+            ("left-pad", "1.3.0", {"url": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"}),
+        ]
+
+        def fake_fetch(_artifact, destination):
+            target = Path(destination) / "left-pad-1.3.0.tgz"
+            with tarfile.open(target, "w:gz") as archive:
+                info = tarfile.TarInfo(name="package/index.js")
+                data = b"module.exports = {};\n"
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+            return target
+
+        fake_ecosystem.fetch_artifact.side_effect = fake_fetch
+
+        bundle = prepare_npm_download_bundle(fake_ecosystem, {"left-pad": "1.3.0"})
+        try:
+            self.assertIn("left-pad-1.3.0.tgz", bundle.downloaded_files)
+            self.assertIn("left-pad-1.3.0.tgz", bundle.artifact_hashes)
+            self.assertIn("left-pad@1.3.0", Path(bundle.requirements_path).read_text())
+        finally:
+            cleanup_download_bundle(bundle)
+
+    def test_sandbox_cache_fingerprint_varies_by_ecosystem(self):
+        pypi_fingerprint = _sandbox_cache_fingerprint({"a.whl": "abc"}, "docker", ecosystem="pypi")
+        npm_fingerprint = _sandbox_cache_fingerprint({"a.whl": "abc"}, "docker", ecosystem="npm")
+
+        self.assertNotEqual(pypi_fingerprint, npm_fingerprint)
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.prepare_npm_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_node_image_and_npm_wrapper_for_npm_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/npm-deep",
+            downloaded_files=["left-pad-1.3.0.tgz"],
+            artifact_hashes={"left-pad-1.3.0.tgz": "abc"},
+            requirements_path="/tmp/npm-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"install_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"left-pad": "1.3.0"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=NPM_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(NPM_ECOSYSTEM, {"left-pad": "1.3.0"})
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(NODE_DOCKER_IMAGE, docker_command)
+        self.assertIn("sandbox_wrapper_npm.js", " ".join(docker_command))
+        self.assertIn("HOME=/tmp", docker_command)
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertTrue(scanned_dir.replace("\\", "/").endswith("/node_modules"))
+        host_install_dir = scanned_dir.rsplit("node_modules", 1)[0].rstrip("/\\")
+        self.assertIn(
+            f"{host_install_dir}:/tmp/depshieldx-npm-install:rw",
+            docker_command,
+        )
+
+
 class EvidenceCollectorTests(unittest.TestCase):
     def test_create_target_dir_uses_platform_temp_root(self):
         target_dir = _create_target_dir()
@@ -294,6 +392,15 @@ class EvidenceCollectorTests(unittest.TestCase):
             self.assertIn(Path(tempfile.gettempdir()), Path(target_dir).parents)
         finally:
             Path(target_dir).rmdir()
+
+    def test_create_target_dir_honors_sandbox_target_dir_override(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            override = str(Path(temp_dir) / "site-packages-sandbox")
+            with patch.dict(os.environ, {"DEPSHIELDX_SANDBOX_TARGET_DIR": override}):
+                target_dir = _create_target_dir()
+
+            self.assertEqual(target_dir, override)
+            self.assertTrue(Path(override).is_dir())
 
     def test_temp_root_probe_paths_are_allowed(self):
         # /private/tmp (macOS's real /tmp target) is intentionally not asserted here: it's only

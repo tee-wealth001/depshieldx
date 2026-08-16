@@ -580,6 +580,18 @@ def _install_guards(evidence: EvidenceCollector) -> None:
 
 
 def _create_target_dir() -> str:
+    # sandbox.py's docker backend bind-mounts a host directory at a fixed
+    # path (so it can scan the install afterward without relying on
+    # `docker cp`, which can't read anything written under the container's
+    # --tmpfs /tmp once the container exits) and tells this script where via
+    # DEPSHIELDX_SANDBOX_TARGET_DIR. The local_subprocess fallback has no
+    # such requirement -- and needs a fresh, uniquely-named directory per
+    # invocation to stay safe under concurrent runs -- so it keeps generating
+    # one itself.
+    override = os.environ.get("DEPSHIELDX_SANDBOX_TARGET_DIR")
+    if override:
+        Path(override).mkdir(parents=True, exist_ok=True)
+        return override
     return tempfile.mkdtemp(prefix="site-packages-")
 
 

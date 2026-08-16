@@ -13,10 +13,13 @@ from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel
 
 from .artifact_analysis import analyze_artifacts
 from .cache import fingerprint_artifacts, load_cache_entry, store_cache_entry
+from .ecosystems import PYPI_ECOSYSTEM
+from .resolver import ResolutionResult
 from .runtime import pip_command, resource_path, system_python_executable
 from .trivy import scan_filesystem
 
 DOCKER_IMAGE = "python:3.11"
+NODE_DOCKER_IMAGE = "node:20"
 SANDBOX_USER = "65534:65534"
 
 
@@ -158,6 +161,7 @@ def _sandbox_cache_fingerprint(
     require_docker: bool = False,
     block_on_static_analysis: bool = True,
     block_on_trivy: bool = False,
+    ecosystem: str = "pypi",
 ) -> str:
     return fingerprint_artifacts(
         {
@@ -166,6 +170,7 @@ def _sandbox_cache_fingerprint(
             "__require_docker__": str(require_docker).lower(),
             "__block_on_static_analysis__": str(block_on_static_analysis).lower(),
             "__block_on_trivy__": str(block_on_trivy).lower(),
+            "__ecosystem__": ecosystem,
         }
     )
 
@@ -274,34 +279,71 @@ def cleanup_download_bundle(bundle: DownloadBundle) -> None:
         shutil.rmtree(bundle.temp_dir, ignore_errors=True)
 
 
-def _scan_sandbox_container(container_id: str) -> Optional[dict]:
+def prepare_npm_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """npm's counterpart to prepare_download_bundle -- downloads (and, via
+    fetch_artifact, SRI-integrity-verifies) every resolved package's real
+    tarball on the host, entirely outside the network-isolated sandbox
+    container, mirroring why PyPI's download step also happens before the
+    isolated container starts. No pip-style hash-locked requirements file is
+    needed here -- npm's own registry-provided SRI digests already give the
+    same guarantee fetch_artifact already checked; depshieldx-lock.txt is
+    still written (as a plain name@version list, not a real npm format) so
+    the shared DownloadBundle/caching code has something to round-trip.
     """
-    Run Trivy on an installed package set in a sandbox container.
-    Copies site-packages from container, scans with Trivy, returns results.
-    Returns None if scan fails or Trivy unavailable.
-    """
-    temp_scan_dir = tempfile.mkdtemp(prefix="depshieldx_trivy_scan_")
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
     try:
-        # Copy site-packages from container to host
-        site_packages_path = "/usr/local/lib/python3.11/site-packages"
-        copy_command = [
-            "docker",
-            "cp",
-            f"{container_id}:{site_packages_path}",
-            temp_scan_dir,
-        ]
-        try:
-            _run_command(copy_command, verbose=False)
-        except subprocess.CalledProcessError:
-            # If copy fails, try to scan what we can (might be empty)
-            pass
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        for _, _, artifact in ecosystem.selected_artifact_entries(resolution):
+            ecosystem.fetch_artifact(artifact, Path(temp_dir))
 
-        # Scan the copied site-packages with Trivy filesystem scan
-        should_block, vulns, warnings = scan_filesystem(
-            temp_scan_dir,
-            severity="HIGH"
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
         )
 
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
+    """
+    Run Trivy directly against the host directory the sandbox container's
+    install destination was bind-mounted to. Not a `docker cp` from the
+    container after it exits: reproduced directly against a real container
+    that content written to the container's --tmpfs /tmp mount (where
+    installs previously happened) is torn down the instant the container
+    process exits, before any post-run `docker cp` could ever read it --
+    silently scanning an empty directory every time. Bind-mounting a host
+    directory as the install destination instead means the files are
+    already on the host, real and inspectable, once the container exits
+    normally.
+
+    trivy.py's scan_filesystem() itself has no ecosystem-specific code --
+    it already understands node_modules natively, same as site-packages --
+    so nothing else here needs to vary by ecosystem.
+    """
+    try:
+        should_block, vulns, warnings = scan_filesystem(
+            host_install_dir,
+            severity="HIGH"
+        )
         return {
             "should_block": should_block,
             "vulnerabilities": vulns,
@@ -316,8 +358,6 @@ def _scan_sandbox_container(container_id: str) -> Optional[dict]:
             "warnings": [f"Trivy sandbox scan failed: {str(e)}"],
             "scanned": False,
         }
-    finally:
-        shutil.rmtree(temp_scan_dir, ignore_errors=True)
 
 
 def run_sandbox(
@@ -329,10 +369,19 @@ def run_sandbox(
     require_docker: bool = False,
     block_on_static_analysis: bool = True,
     block_on_trivy: bool = False,
+    ecosystem=PYPI_ECOSYSTEM,
 ) -> SandboxResult:
     """
     Test-install a package offline inside an isolated Docker container.
+
+    npm support (ecosystem=NPM_ECOSYSTEM) only targets the Docker backend --
+    the local_subprocess fallback below is pip/sandbox_wrapper.py-specific
+    and, in practice, unreachable from the real CLI flow anyway: cli/engine.py's
+    _run_deep_flow always calls this with require_docker=True, which returns
+    before the fallback branch is ever taken, for either ecosystem.
     """
+    is_npm = ecosystem.name == "npm"
+    docker_image = NODE_DOCKER_IMAGE if is_npm else DOCKER_IMAGE
     if isinstance(install_targets, str):
         install_targets = [install_targets]
     else:
@@ -340,7 +389,7 @@ def run_sandbox(
     bundle = None
     isolation = {
         "backend": "docker",
-        "image": DOCKER_IMAGE,
+        "image": docker_image,
         "network": "none",
         "read_only_rootfs": True,
         "no_new_privileges": True,
@@ -363,7 +412,7 @@ def run_sandbox(
                     error_type="environment",
                     isolation={
                         "backend": "docker",
-                        "image": DOCKER_IMAGE,
+                        "image": docker_image,
                         "docker_error": docker_error,
                     },
                     evidence=None,
@@ -382,18 +431,22 @@ def run_sandbox(
                 "docker_error": docker_error,
             }
 
-        bundle = prepare_download_bundle(
-            install_targets,
-            resolved_versions,
-            verbose=verbose,
-            download_via_host=(backend != "docker"),
-        )
+        if is_npm:
+            bundle = prepare_npm_download_bundle(ecosystem, resolved_versions or {})
+        else:
+            bundle = prepare_download_bundle(
+                install_targets,
+                resolved_versions,
+                verbose=verbose,
+                download_via_host=(backend != "docker"),
+            )
         cache_fingerprint = _sandbox_cache_fingerprint(
             bundle.artifact_hashes,
             backend,
             require_docker=require_docker,
             block_on_static_analysis=block_on_static_analysis,
             block_on_trivy=block_on_trivy,
+            ecosystem=ecosystem.name,
         )
         bundle.fingerprint = cache_fingerprint
         cache_entry = load_cache_entry(cache_fingerprint) if cache_enabled else None
@@ -435,9 +488,57 @@ def run_sandbox(
                 trivy_results=None,
             )
         if backend == "docker":
-            # Create a unique container name for Trivy scanning post-installation
+            # Create a unique container name for cleanup purposes
             container_name = f"depshieldx_{uuid.uuid4().hex[:12]}"
-            
+            # The install destination is bind-mounted from the host (not left
+            # under the container's --tmpfs /tmp) so Trivy can scan it after
+            # the container exits. Reproduced directly against a real
+            # container: content written to a --tmpfs mount is torn down the
+            # instant the container process exits, before any post-run
+            # `docker cp` could read it -- the previous docker-cp-after-exit
+            # approach was silently scanning nothing on every deep-mode run,
+            # for both ecosystems.
+            host_install_dir = tempfile.mkdtemp(prefix="depshieldx_sandbox_install_")
+
+            env_args = []
+            if is_npm:
+                container_entrypoint = [
+                    "node",
+                    "/depshieldx/sandbox_wrapper_npm.js",
+                    "/tmp/packages",
+                ]
+                wrapper_mount = f"{resource_path('sandbox_wrapper_npm.js').parent}:/depshieldx:ro"
+                # Bind-mounted at the whole project dir (not just
+                # .../node_modules): mounting only the node_modules subpath
+                # left its parent as a plain directory Docker auto-creates as
+                # the (root-owned) mount point, which SANDBOX_USER can't
+                # write package.json into -- reproduced directly. Mounting
+                # the parent itself means package.json and node_modules both
+                # land inside the one bind-mounted, host-owned directory.
+                container_install_path = "/tmp/depshieldx-npm-install"
+                host_scan_subpath = "node_modules"
+                # SANDBOX_USER (65534, "nobody") has no home directory in the
+                # node:20 image, so npm's cache/log writes fail outright
+                # (ENOENT against the nonexistent default HOME) -- reproduced
+                # directly against a real container. /tmp is the one writable
+                # path (the tmpfs mount below), so point HOME there.
+                env_args = ["-e", "HOME=/tmp"]
+            else:
+                container_entrypoint = [
+                    "python",
+                    "/depshieldx/sandbox_wrapper.py",
+                    "/tmp/packages",
+                    *install_targets,
+                ]
+                wrapper_mount = f"{resource_path('sandbox_wrapper.py').parent}:/depshieldx:ro"
+                # Fixed (not tempfile.mkdtemp-random) so the host bind mount
+                # below can target it; must stay under the "/tmp/site-packages"
+                # prefix sandbox_wrapper.py's write-guard allowlist already
+                # checks against.
+                container_install_path = "/tmp/site-packages-sandbox"
+                host_scan_subpath = None
+                env_args = env_args + ["-e", f"DEPSHIELDX_SANDBOX_TARGET_DIR={container_install_path}"]
+
             docker_command = [
                 "docker",
                 "run",
@@ -462,26 +563,31 @@ def run_sandbox(
                 "/tmp:rw,noexec,nosuid,nodev,size=256m",
                 "--workdir",
                 "/tmp",
+                *env_args,
                 "-v",
                 f"{bundle.temp_dir}:/tmp/packages:ro",
                 "-v",
-                f"{resource_path('sandbox_wrapper.py').parent}:/depshieldx:ro",
-                DOCKER_IMAGE,
-                "python",
-                "/depshieldx/sandbox_wrapper.py",
-                "/tmp/packages",
-                *install_targets,
+                wrapper_mount,
+                "-v",
+                f"{host_install_dir}:{container_install_path}:rw",
+                docker_image,
+                *container_entrypoint,
             ]
             trivy_results = None
             try:
                 result = _run_command(docker_command, verbose=False)
                 if verbose:
                     _emit_command_output(result.stdout, result.stderr, suppress_prefixes=(REPORT_PREFIX,))
-                
-                # If installation succeeded, run Trivy scan on the container
-                trivy_results = _scan_sandbox_container(container_name)
+
+                # Scan the bind-mounted host directory directly -- it already
+                # holds whatever the container installed, no docker cp needed.
+                scan_dir = (
+                    str(Path(host_install_dir) / host_scan_subpath) if host_scan_subpath else host_install_dir
+                )
+                trivy_results = _scan_host_install_dir(scan_dir)
             finally:
-                # Clean up the container (whether scan succeeded or not)
+                # Clean up the container and the host install dir (whether
+                # scan succeeded or not)
                 try:
                     subprocess.run(
                         ["docker", "rm", "--force", container_name],
@@ -490,6 +596,7 @@ def run_sandbox(
                     )
                 except Exception:
                     pass  # Container cleanup is best-effort
+                shutil.rmtree(host_install_dir, ignore_errors=True)
         else:
             result = _run_local_sandbox(bundle, install_targets, verbose=verbose)
             trivy_results = None

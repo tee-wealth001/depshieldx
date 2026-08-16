@@ -8,8 +8,14 @@ from typing import Iterable, List
 
 MAX_SCAN_BYTES = 512_000
 MAX_BINARY_SCAN_BYTES = 1_048_576
-TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini"}
-INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg"}
+# .tgz/.tar archives are already handled generically below (npm tarballs use
+# the same tar+gzip format sdists do) -- these two sets are what actually
+# gate per-file scanning, and were PyPI-only until npm deep mode needed them
+# too: .js/.mjs/.cjs/.ts/.json cover npm package source and manifests, and
+# package.json is npm's "install_only" analogue to setup.py -- where a
+# postinstall/preinstall script command would appear as plain text.
+TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json"}
+INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json"}
 NATIVE_BINARY_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
 ASCII_STRING_PATTERN = re.compile(rb"[\x20-\x7e]{6,}")
 URL_PATTERN = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{6,}")
@@ -115,12 +121,17 @@ SENSITIVE_ENV_ACCESS_PATTERN = re.compile(
             (AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|GITHUB_TOKEN|PYPI_TOKEN|NPM_TOKEN|API_KEY|PRIVATE_KEY|BEARER_TOKEN)
             ["']
         \s*\)
+        |
+        process\.env(?:\.|\[["']?)
+            (AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|GITHUB_TOKEN|PYPI_TOKEN|NPM_TOKEN|API_KEY|PRIVATE_KEY|BEARER_TOKEN)
+            ["']?\]?
     )
     """,
     re.VERBOSE,
 )
 PAYLOAD_CHAIN_PATTERN = re.compile(
-    r"\b(base64\.b64decode|marshal\.loads|zlib\.decompress)\b.*\b(exec|eval|compile)\s*\(",
+    r"\b(base64\.b64decode|marshal\.loads|zlib\.decompress|Buffer\.from\s*\([^)]*base64|atob)\b.*"
+    r"\b(exec|eval|compile|Function)\s*\(",
     re.DOTALL,
 )
 PATTERN_RULES = (
@@ -142,6 +153,27 @@ PATTERN_RULES = (
         "code": "install_subprocess",
         "severity": "high",
         "pattern": re.compile(r"\b(subprocess\.|os\.system\s*\()"),
+        "install_only": True,
+        "message": "Install script launches shell or subprocess commands.",
+    },
+    {
+        "code": "install_exec_eval_js",
+        "severity": "high",
+        "pattern": re.compile(r"\b(eval|new Function)\s*\("),
+        "install_only": True,
+        "message": "Install script uses dynamic code execution.",
+    },
+    {
+        "code": "install_network_access_js",
+        "severity": "high",
+        "pattern": re.compile(r"\brequire\s*\(\s*['\"](https?|net|dgram)['\"]\s*\)|\bfetch\s*\(|\baxios\."),
+        "install_only": True,
+        "message": "Install script appears to perform network access.",
+    },
+    {
+        "code": "install_subprocess_js",
+        "severity": "high",
+        "pattern": re.compile(r"require\s*\(\s*['\"]child_process['\"]\s*\)|\b(exec|execSync|spawn|spawnSync)\s*\("),
         "install_only": True,
         "message": "Install script launches shell or subprocess commands.",
     },

