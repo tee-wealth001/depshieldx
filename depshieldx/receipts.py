@@ -292,11 +292,28 @@ def _package_historical_vulnerabilities(scan: dict | None, package_name: str, pa
     return historical
 
 
-def _project_url(package_name: str, package_version: str) -> str:
+def _project_url(ecosystem: str, package_name: str, package_version: str) -> str:
+    # Pre-existing gap, not cargo-specific: this was hardcoded to pypi.org
+    # regardless of ecosystem, already silently wrong for every npm receipt.
+    # Fixed for all three ecosystems in the same pass. URL formats confirmed
+    # directly (npmjs.com's /package/{name}/v/{version} and crates.io's
+    # /crates/{name}/{version} both verified to resolve with a real HTTP
+    # request, not guessed).
+    if ecosystem == "npm":
+        return f"https://www.npmjs.com/package/{quote(package_name)}/v/{quote(package_version)}"
+    if ecosystem == "cargo":
+        return f"https://crates.io/crates/{quote(package_name)}/{quote(package_version)}"
     return f"https://pypi.org/project/{quote(package_name)}/{quote(package_version)}/"
 
 
+def _install_target_label(ecosystem: str, package_name: str, package_version: str) -> str:
+    if ecosystem in ("npm", "cargo"):
+        return f"{package_name}@{package_version}"
+    return f"{package_name}=={package_version}"
+
+
 def _package_receipt_summary(report: dict, package_name: str, package_version: str, requested_target: str) -> dict:
+    ecosystem = report.get("ecosystem", "pypi")
     resolution = report.get("resolution") or {}
     provenance = report.get("provenance") or {}
     sandbox = report.get("sandbox") or {}
@@ -307,8 +324,9 @@ def _package_receipt_summary(report: dict, package_name: str, package_version: s
         None,
     )
 
+    install_target_label = _install_target_label(ecosystem, package_name, package_version)
     if install.get("success"):
-        install["target"] = f"{package_name}=={package_version}"
+        install["target"] = install_target_label
 
     summary = {
         "package": {
@@ -316,12 +334,12 @@ def _package_receipt_summary(report: dict, package_name: str, package_version: s
             "version": package_version,
             "requested": True,
             "requested_target": requested_target,
-            "project_url": _project_url(package_name, package_version),
+            "project_url": _project_url(ecosystem, package_name, package_version),
             "selected_artifact_count": len(selected_artifacts),
             "selected_artifacts": selected_artifacts,
         },
         "resolution": {
-            "install_target": f"{package_name}=={package_version}",
+            "install_target": install_target_label,
             "requested_targets": resolution.get("requested_targets") or [],
             "resolved_package_count": len(resolution.get("packages") or []),
             "source_type": resolution.get("source_type"),

@@ -17,6 +17,7 @@ DEPS_DEV_VERSION_URL_TEMPLATES = (
 DEPS_DEV_SYSTEM_NAMES = {
     "pypi": "pypi",
     "npm": "npm",
+    "cargo": "cargo",
 }
 
 

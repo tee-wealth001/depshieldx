@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from .base import Ecosystem
+from .cargo import CARGO_ECOSYSTEM
 from .npm import NPM_ECOSYSTEM
 from .pypi import PYPI_ECOSYSTEM
 
 ECOSYSTEMS: dict[str, Ecosystem] = {
     PYPI_ECOSYSTEM.name: PYPI_ECOSYSTEM,
     NPM_ECOSYSTEM.name: NPM_ECOSYSTEM,
+    CARGO_ECOSYSTEM.name: CARGO_ECOSYSTEM,
 }
 
 

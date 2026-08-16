@@ -3,6 +3,7 @@ from pathlib import Path
 import tomllib
 
 NPM_LOCKFILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+CARGO_LOCKFILE_NAMES = {"Cargo.lock"}
 
 
 @dataclass
@@ -90,6 +91,16 @@ def load_input_source(
                 requested_targets=[lockfile],
                 pip_args=[],
                 ecosystem="npm",
+            )
+        if lockfile_name in CARGO_LOCKFILE_NAMES:
+            # Same reasoning as the npm branch above -- CargoEcosystem.resolve()
+            # parses Cargo.lock itself.
+            return InputSource(
+                source_type="lockfile",
+                label=lockfile_name,
+                requested_targets=[lockfile],
+                pip_args=[],
+                ecosystem="cargo",
             )
         if lockfile_name == "uv.lock":
             requested_targets = _parse_uv_lock(lockfile)
