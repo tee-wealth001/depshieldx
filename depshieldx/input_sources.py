@@ -65,6 +65,7 @@ def load_input_source(
     requirement_file: str | None = None,
     lockfile: str | None = None,
     pyproject_file: str | None = None,
+    ecosystem: str | None = None,
 ) -> InputSource:
     if sum(bool(item) for item in [requirement_file, lockfile, pyproject_file]) > 1:
         raise ValueError("Use only one of requirement_file, lockfile, or pyproject_file")
@@ -110,16 +111,22 @@ def load_input_source(
         )
     if not normalized_targets:
         raise ValueError("Provide at least one package, a requirement file, a lockfile, or a pyproject file")
+    # --ecosystem only applies to bare package-name targets -- requirements.txt/pyproject.toml
+    # are inherently PyPI-specific formats, and a lockfile's ecosystem is already auto-detected
+    # by filename above, so there's nothing meaningful to override in those branches.
+    resolved_ecosystem = ecosystem or "pypi"
     if len(normalized_targets) == 1:
         return InputSource(
             source_type="package",
             label=normalized_targets[0],
             requested_targets=normalized_targets,
             pip_args=normalized_targets,
+            ecosystem=resolved_ecosystem,
         )
     return InputSource(
         source_type="packages",
         label=", ".join(normalized_targets),
         requested_targets=normalized_targets,
         pip_args=normalized_targets[:],
+        ecosystem=resolved_ecosystem,
     )

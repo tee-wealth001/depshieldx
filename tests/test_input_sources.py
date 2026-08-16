@@ -46,6 +46,19 @@ class InputSourceTests(unittest.TestCase):
 
         self.assertEqual(source.ecosystem, "pypi")
 
+    def test_load_input_source_honors_ecosystem_override_for_single_package(self):
+        source = load_input_source(("left-pad",), ecosystem="npm")
+
+        self.assertEqual(source.source_type, "package")
+        self.assertEqual(source.ecosystem, "npm")
+        self.assertEqual(source.requested_targets, ["left-pad"])
+
+    def test_load_input_source_honors_ecosystem_override_for_multiple_packages(self):
+        source = load_input_source(("left-pad", "is-odd"), ecosystem="npm")
+
+        self.assertEqual(source.source_type, "packages")
+        self.assertEqual(source.ecosystem, "npm")
+
     def test_load_input_source_detects_package_lock_json_as_npm(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "package-lock.json"

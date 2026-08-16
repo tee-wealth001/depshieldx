@@ -99,6 +99,116 @@ class NpmEcosystemLiveRegistryTests(unittest.TestCase):
             self.assertGreater(destination.stat().st_size, 0)
 
 
+class NpmAdHocResolveTests(unittest.TestCase):
+    def test_resolve_reports_error_for_missing_package_targets(self):
+        resolution = NPM_ECOSYSTEM.resolve([], [], "unused", source_type="package")
+
+        self.assertFalse(resolution.resolution_succeeded)
+
+    @patch("depshieldx.ecosystems.NpmEcosystem._resolve_via_npm_registry")
+    def test_resolve_single_package_uses_registry_resolution(self, mock_resolve):
+        mock_resolve.return_value = {"left-pad": "1.3.0"}
+
+        resolution = NPM_ECOSYSTEM.resolve([], ["left-pad"], "left-pad", source_type="package")
+
+        mock_resolve.assert_called_once_with(["left-pad"])
+        self.assertTrue(resolution.resolution_succeeded)
+        self.assertEqual(resolution.packages, ["left-pad"])
+        self.assertEqual(resolution.resolved_versions, {"left-pad": "1.3.0"})
+        self.assertEqual(resolution.source_type, "package")
+
+    @patch("depshieldx.ecosystems.NpmEcosystem._resolve_via_npm_registry")
+    def test_resolve_multiple_packages_uses_registry_resolution(self, mock_resolve):
+        mock_resolve.return_value = {"left-pad": "1.3.0", "is-odd": "3.0.1"}
+
+        resolution = NPM_ECOSYSTEM.resolve(
+            [], ["left-pad", "is-odd"], "left-pad, is-odd", source_type="packages"
+        )
+
+        mock_resolve.assert_called_once_with(["left-pad", "is-odd"])
+        self.assertTrue(resolution.resolution_succeeded)
+        self.assertCountEqual(resolution.packages, ["left-pad", "is-odd"])
+
+    @patch("depshieldx.ecosystems.NpmEcosystem._resolve_via_npm_registry")
+    def test_resolve_reports_registry_failure(self, mock_resolve):
+        mock_resolve.side_effect = RuntimeError("npm could not resolve does-not-exist-xyz: 404 Not Found")
+
+        resolution = NPM_ECOSYSTEM.resolve([], ["does-not-exist-xyz"], "does-not-exist-xyz", source_type="package")
+
+        self.assertFalse(resolution.resolution_succeeded)
+        self.assertIn("does-not-exist-xyz", resolution.resolution_error)
+
+
+@pytest.mark.live
+class NpmAdHocLiveResolveTests(unittest.TestCase):
+    """Hits the real npm registry via a throwaway temp project, verifying the
+    exact command shape (--package-lock-only without --dry-run) still writes
+    a real, parseable lockfile -- see NpmEcosystem._resolve_via_npm_registry's
+    docstring for why --dry-run was found to suppress the lockfile entirely."""
+
+    def test_resolve_single_ad_hoc_package_against_real_registry(self):
+        resolution = NPM_ECOSYSTEM.resolve([], ["left-pad"], "left-pad", source_type="package")
+
+        self.assertTrue(resolution.resolution_succeeded)
+        self.assertEqual(resolution.resolved_versions["left-pad"], "1.3.0")
+
+
+class NpmHostInstallCommandTests(unittest.TestCase):
+    """host_install_command must pin ad-hoc package installs to the exact
+    scanned version (npm install <name>@<version>) rather than a bare
+    "npm install", which would silently do nothing for a brand-new package
+    not already listed in the cwd's package.json."""
+
+    def _resolution(self, source_type, requested_targets, resolved_versions):
+        from depshieldx.resolver import ResolutionResult
+
+        return ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target=", ".join(requested_targets),
+            resolved_versions=resolved_versions,
+            requested_targets=requested_targets,
+            source_type=source_type,
+        )
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
+    @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
+    def test_ad_hoc_single_package_install_is_pinned(self, _mock_entries, _mock_fetch, _mock_which):
+        resolution = self._resolution("package", ["left-pad"], {"left-pad": "1.3.0"})
+
+        with NPM_ECOSYSTEM.host_install_command(resolution) as command:
+            self.assertEqual(command, ["/usr/local/bin/npm", "install", "left-pad@1.3.0"])
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
+    @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
+    def test_ad_hoc_multi_package_install_is_pinned(self, _mock_entries, _mock_fetch, _mock_which):
+        resolution = self._resolution(
+            "packages", ["left-pad", "is-odd"], {"left-pad": "1.3.0", "is-odd": "3.0.1"}
+        )
+
+        with NPM_ECOSYSTEM.host_install_command(resolution) as command:
+            self.assertEqual(command, ["/usr/local/bin/npm", "install", "left-pad@1.3.0", "is-odd@3.0.1"])
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
+    @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
+    def test_ad_hoc_scoped_package_install_is_pinned(self, _mock_entries, _mock_fetch, _mock_which):
+        resolution = self._resolution("package", ["@babel/core"], {"@babel/core": "8.0.1"})
+
+        with NPM_ECOSYSTEM.host_install_command(resolution) as command:
+            self.assertEqual(command, ["/usr/local/bin/npm", "install", "@babel/core@8.0.1"])
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
+    @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
+    def test_lockfile_install_stays_bare(self, _mock_entries, _mock_fetch, _mock_which):
+        resolution = self._resolution("lockfile", ["package-lock.json"], {"left-pad": "1.3.0"})
+
+        with NPM_ECOSYSTEM.host_install_command(resolution) as command:
+            self.assertEqual(command, ["/usr/local/bin/npm", "install"])
+
+
 class NpmToolResolutionTests(unittest.TestCase):
     """Regression coverage for a real bug: subprocess.run(["npm", ...]) fails on
     Windows with WinError 2 even when npm is genuinely installed, because npm

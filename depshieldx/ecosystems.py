@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import shutil
+import subprocess
 import tempfile
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -23,7 +25,7 @@ from urllib.request import url2pathname
 
 import requests
 
-from .npm_lockfiles import parse_lockfile
+from .npm_lockfiles import parse_lockfile, parse_package_lock_json
 from .npm_registry import check_provenance_batch as npm_check_provenance_batch, fetch_package_metadata
 from .provenance import check_provenance_batch
 from .resolver import ResolutionResult, resolve_dependencies, resolve_install_inputs
@@ -56,10 +58,24 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
     return name.strip().lower() if name else ""
 
 
+def _strip_version_spec(target: str, ecosystem: str) -> str:
+    if ecosystem == "pypi":
+        return target.split("[", 1)[0].split("==", 1)[0]
+    if ecosystem == "npm":
+        # "left-pad@1.3.0" -> "left-pad"; "@babel/core@^7.0.0" -> "@babel/core".
+        # Scoped packages have a leading "@" that must be skipped when searching
+        # for the name/version separator "@" (same rule as npm_lockfiles.py's
+        # yarn.lock parsing).
+        search_from = 1 if target.startswith("@") else 0
+        at_index = target.find("@", search_from)
+        return target[:at_index] if at_index != -1 else target
+    return target
+
+
 def package_records(ecosystem: str, resolution: ResolutionResult) -> list[PackageRecord]:
     """Build ecosystem-neutral records from a resolver's ResolutionResult."""
     direct_names = {
-        _normalize_name_for_ecosystem(target.split("[", 1)[0].split("==", 1)[0], ecosystem)
+        _normalize_name_for_ecosystem(_strip_version_spec(target, ecosystem), ecosystem)
         for target in resolution.requested_targets
     }
     records = []
@@ -262,32 +278,42 @@ class NpmEcosystem:
         install_target: str,
         source_type: str = "package",
     ) -> ResolutionResult:
-        if source_type != "lockfile" or not requested_targets:
-            return ResolutionResult(
-                packages=[],
-                install_target=install_target,
-                resolved_versions={},
-                requested_targets=requested_targets[:],
-                source_type=source_type,
-                resolution_succeeded=False,
-                resolution_error=(
-                    "npm resolution currently supports lockfile-based scans only "
-                    "(package-lock.json, yarn.lock, pnpm-lock.yaml)"
-                ),
-            )
-        lockfile_path = requested_targets[0]
-        try:
-            resolved_versions = parse_lockfile(lockfile_path)
-        except Exception as exc:
-            return ResolutionResult(
-                packages=[],
-                install_target=install_target,
-                resolved_versions={},
-                requested_targets=requested_targets[:],
-                source_type=source_type,
-                resolution_succeeded=False,
-                resolution_error=str(exc),
-            )
+        if source_type == "lockfile" and requested_targets:
+            try:
+                resolved_versions = parse_lockfile(requested_targets[0])
+            except Exception as exc:
+                return self._failed_resolution(install_target, requested_targets, source_type, str(exc))
+            return self._succeeded_resolution(install_target, requested_targets, source_type, resolved_versions)
+
+        if source_type in ("package", "packages") and requested_targets:
+            try:
+                resolved_versions = self._resolve_via_npm_registry(requested_targets)
+            except Exception as exc:
+                return self._failed_resolution(install_target, requested_targets, source_type, str(exc))
+            return self._succeeded_resolution(install_target, requested_targets, source_type, resolved_versions)
+
+        return self._failed_resolution(
+            install_target,
+            requested_targets,
+            source_type,
+            "npm resolution supports a lockfile (package-lock.json, yarn.lock, pnpm-lock.yaml) "
+            "or one or more package names",
+        )
+
+    @staticmethod
+    def _failed_resolution(install_target, requested_targets, source_type, error):
+        return ResolutionResult(
+            packages=[],
+            install_target=install_target,
+            resolved_versions={},
+            requested_targets=requested_targets[:],
+            source_type=source_type,
+            resolution_succeeded=False,
+            resolution_error=error,
+        )
+
+    @staticmethod
+    def _succeeded_resolution(install_target, requested_targets, source_type, resolved_versions):
         return ResolutionResult(
             packages=list(resolved_versions.keys()),
             install_target=install_target,
@@ -296,6 +322,43 @@ class NpmEcosystem:
             source_type=source_type,
             resolution_succeeded=True,
         )
+
+    def _resolve_via_npm_registry(self, package_targets: list[str]) -> dict[str, str]:
+        """Resolve one or more ad-hoc npm package targets (and their full
+        transitive dependency tree) by shelling out to npm's own resolver in
+        an isolated temp project, mirroring why PyPiEcosystem shells out to
+        pip's --report for the same reason: reimplementing npm's dependency
+        resolution algorithm ourselves would be complex and likely subtly
+        wrong. --package-lock-only (without --dry-run, which was found to
+        suppress the lockfile write entirely rather than just previewing it)
+        writes a real, accurate lockfile without installing anything to disk
+        -- verified directly against the real npm registry during development.
+        """
+        with tempfile.TemporaryDirectory(prefix="depshieldx_npm_resolve_") as temp_dir:
+            temp_path = Path(temp_dir)
+            (temp_path / "package.json").write_text(
+                json.dumps({"name": "depshieldx-resolve", "version": "0.0.0", "private": True})
+            )
+            result = subprocess.run(
+                [
+                    resolve_node_tool("npm"),
+                    "install",
+                    *package_targets,
+                    "--package-lock-only",
+                    "--no-audit",
+                    "--no-fund",
+                ],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(f"npm could not resolve {', '.join(package_targets)}: {detail}")
+            lockfile_path = temp_path / "package-lock.json"
+            if not lockfile_path.exists():
+                raise RuntimeError(f"npm did not produce a lockfile while resolving {', '.join(package_targets)}")
+            return parse_package_lock_json(lockfile_path)
 
     def check_provenance(
         self,
@@ -351,15 +414,29 @@ class NpmEcosystem:
     def host_install_command(self, resolution: ResolutionResult):
         # Unlike pip, npm doesn't install from a list of individually-downloaded
         # artifact paths -- it installs from package.json/the lockfile already on
-        # disk. Fetching (and integrity-checking) each artifact here still proves
-        # the resolved set is real and intact before yielding the real install
-        # command, even though the fetched files themselves aren't passed to it.
+        # disk (lockfile flow) or by re-resolving pinned name@version targets
+        # against the registry itself (ad-hoc package flow). Fetching (and
+        # integrity-checking) each artifact here still proves the resolved set
+        # is real and intact before yielding the real install command, even
+        # though the fetched files themselves aren't passed to it.
         artifact_entries = self.selected_artifact_entries(resolution)
         with tempfile.TemporaryDirectory(prefix="depshieldx_host_install_") as temp_dir:
             temp_path = Path(temp_dir)
             for _, _, artifact in artifact_entries:
                 self.fetch_artifact(artifact, temp_path)
-            yield self.install_command([])
+            if resolution.source_type in ("package", "packages"):
+                # A bare "npm install" only reinstalls what's already in
+                # package.json -- it wouldn't add a brand-new package. Pin each
+                # requested target to the exact version verified above so the
+                # install can't drift to a version published after the scan.
+                pinned_targets = []
+                for target in resolution.requested_targets:
+                    name = _strip_version_spec(target, "npm")
+                    version = resolution.resolved_versions.get(name)
+                    pinned_targets.append(f"{name}@{version}" if version else target)
+                yield [resolve_node_tool("npm"), "install", *pinned_targets]
+            else:
+                yield self.install_command([])
 
     def install_command(self, artifact_paths: list[str]) -> list[str]:
         return [resolve_node_tool("npm"), "install"]

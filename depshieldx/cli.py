@@ -914,13 +914,14 @@ def _extract_simple_install_target(pip_args):
     return requirements[0]
 
 
-def _load_cli_input(targets, requirement_file=None, lockfile=None, pyproject_file=None):
+def _load_cli_input(targets, requirement_file=None, lockfile=None, pyproject_file=None, ecosystem=None):
     try:
         return load_input_source(
             targets,
             requirement_file=requirement_file,
             lockfile=lockfile,
             pyproject_file=pyproject_file,
+            ecosystem=ecosystem,
         )
     except ValueError as exc:
         raise click.UsageError(str(exc)) from exc
@@ -1298,6 +1299,13 @@ def _run_deep_flow(
 @click.option("-r", "--requirement", "requirement_file", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Install from a requirements file")
 @click.option("--lockfile", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Install from a lockfile such as uv.lock")
 @click.option("--pyproject", "pyproject_file", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Install dependencies from a pyproject.toml file")
+@click.option(
+    "--ecosystem",
+    "ecosystem_option",
+    type=click.Choice(["pypi", "npm"], case_sensitive=False),
+    default=None,
+    help="Ecosystem for bare package-name targets (ignored for --lockfile, which is auto-detected by filename). Defaults to pypi.",
+)
 @click.option("--fast", is_flag=True, help="Resolve, check provenance, and query the 4 vulnerability sources before install")
 @click.option("--deep", is_flag=True, help="Full behavioral sandbox scan")
 @click.option("--no-cache", is_flag=True, help="Disable local deep-scan bundle cache")
@@ -1322,6 +1330,7 @@ def install(
     requirement_file,
     lockfile,
     pyproject_file,
+    ecosystem_option,
     fast,
     deep,
     no_cache,
@@ -1350,6 +1359,7 @@ def install(
         requirement_file=requirement_file,
         lockfile=lockfile,
         pyproject_file=pyproject_file,
+        ecosystem=ecosystem_option,
     )
     package_name = input_source.label
     ecosystem = _ecosystem_for_input_source(input_source)
@@ -1406,6 +1416,13 @@ def install(
 @click.option("-r", "--requirement", "requirement_file", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Scan packages from a requirements file")
 @click.option("--lockfile", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Scan packages from a lockfile such as uv.lock")
 @click.option("--pyproject", "pyproject_file", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Scan dependencies from a pyproject.toml file")
+@click.option(
+    "--ecosystem",
+    "ecosystem_option",
+    type=click.Choice(["pypi", "npm"], case_sensitive=False),
+    default=None,
+    help="Ecosystem for bare package-name targets (ignored for --lockfile, which is auto-detected by filename). Defaults to pypi.",
+)
 @click.option("--fast", is_flag=True, help="Resolve, check provenance, and query the 4 vulnerability sources only")
 @click.option("--deep", is_flag=True, help="Resolve, check provenance, and run Docker + Trivy without host install")
 @click.option("--no-cache", is_flag=True, help="Disable local deep-scan bundle cache")
@@ -1423,7 +1440,7 @@ def install(
     show_default=True,
     help="Choose report output format for humans or automation",
 )
-def scan(targets, requirement_file, lockfile, pyproject_file, fast, deep, no_cache, verbose, full_report, output_mode):
+def scan(targets, requirement_file, lockfile, pyproject_file, ecosystem_option, fast, deep, no_cache, verbose, full_report, output_mode):
     """Scan one or more packages without installing them."""
     if fast and deep:
         raise click.UsageError("Use only one of --fast or --deep")
@@ -1439,6 +1456,7 @@ def scan(targets, requirement_file, lockfile, pyproject_file, fast, deep, no_cac
         requirement_file=requirement_file,
         lockfile=lockfile,
         pyproject_file=pyproject_file,
+        ecosystem=ecosystem_option,
     )
     package_name = input_source.label
     ecosystem = _ecosystem_for_input_source(input_source)
@@ -1636,14 +1654,22 @@ NPM_FAMILY_LOCKFILES = {
 
 
 def _is_plain_npm_family_install(args):
-    # Only intercept a bare "install"/"i"/"ci" with no specific package named --
-    # NpmEcosystem's resolve() only supports lockfile-based resolution in this
-    # phase, not resolving an ad-hoc new package the way "npm install left-pad"
-    # would need. Anything else passes through untouched, same principle as the
-    # pip shim only intercepting "pip install <single-package>".
+    # Only intercept a bare "install"/"i"/"ci" with no specific package named.
     if not args or args[0] not in ("install", "i", "ci"):
         return False
     return all(arg.startswith("-") for arg in args[1:])
+
+
+def _extract_simple_npm_family_install_targets(args):
+    # Mirrors _extract_simple_install_target's pip equivalent: only intercept
+    # "install"/"i" naming one or more specific packages, no other flags, so
+    # anything ambiguous (e.g. "-g", "--save-dev") passes through untouched.
+    if not args or args[0] not in ("install", "i"):
+        return None
+    targets = [arg for arg in args[1:] if not arg.startswith("-")]
+    if not targets or len(targets) != len(args[1:]):
+        return None
+    return targets
 
 
 def _route_npm_family(manager, args):
@@ -1655,9 +1681,17 @@ def _route_npm_family(manager, args):
         result = subprocess.run(command, check=False)
         raise SystemExit(result.returncode)
 
+    if manager == "npm":
+        package_targets = _extract_simple_npm_family_install_targets(args)
+        if package_targets:
+            click.echo(f"Routing {manager} install through depshieldx...")
+            command = self_invoke_command(["install", *package_targets, "--ecosystem", "npm"])
+            result = subprocess.run(command, check=False)
+            raise SystemExit(result.returncode)
+
     click.secho(
-        f"depshieldx routing only intercepts a plain '{manager} install' when {lockfile_name} is present. "
-        f"Passing through to {manager}.",
+        f"depshieldx routing only intercepts a plain '{manager} install' when {lockfile_name} is present, "
+        f"or '{manager} install <package...>' for new packages. Passing through to {manager}.",
         fg="yellow",
         err=True,
     )

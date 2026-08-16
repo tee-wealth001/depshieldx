@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from depshieldx.cli import cli
+from depshieldx.cli import _load_cli_input, cli
 
 SAMPLE_PACKAGE_LOCK_JSON = {
     "name": "sample-app",
@@ -67,6 +67,34 @@ class CliNpmDispatchTests(unittest.TestCase):
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("not supported yet", str(result.output) + str(result.exception))
+
+    @pytest.mark.live
+    def test_scan_bare_package_with_ecosystem_npm_flag(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["scan", "left-pad", "--ecosystem", "npm", "--fast", "--output", "json"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["ecosystem"], "npm")
+        self.assertEqual(payload["resolution"]["source_type"], "package")
+        self.assertEqual(payload["resolution"]["resolved_versions"]["left-pad"], "1.3.0")
+
+    def test_load_cli_input_defaults_to_pypi_without_ecosystem_flag(self):
+        input_source = _load_cli_input(("some-package",))
+
+        self.assertEqual(input_source.ecosystem, "pypi")
+
+    def test_load_cli_input_honors_ecosystem_npm_flag(self):
+        input_source = _load_cli_input(("left-pad",), ecosystem="npm")
+
+        self.assertEqual(input_source.ecosystem, "npm")
+
+    def test_install_rejects_invalid_ecosystem_choice(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["install", "left-pad", "--ecosystem", "cargo"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Invalid value", result.output)
 
     def test_uninstall_rejected_for_npm_lockfile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
