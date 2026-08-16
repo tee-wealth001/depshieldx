@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from depshieldx.cli import cli
@@ -25,10 +26,12 @@ SAMPLE_PACKAGE_LOCK_JSON = {
 
 class CliNpmDispatchTests(unittest.TestCase):
     """Proves the CLI actually routes npm lockfile input to NpmEcosystem end to
-    end -- real resolution, real provenance/CVE lookups against the live npm
-    registry and OSV/GHSA/deps.dev, matching this suite's existing pattern of
-    verifying real API behavior rather than only mocking."""
+    end. The scan test below is marked live (real resolution + provenance/CVE
+    lookups against the real npm registry/OSV/GHSA/deps.dev, excluded from the
+    default CI run); the --deep/uninstall rejection tests fail fast on a
+    UsageError before any network call happens, so they don't need marking."""
 
+    @pytest.mark.live
     def test_scan_with_npm_lockfile_reports_npm_ecosystem_in_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             lockfile = Path(temp_dir) / "package-lock.json"

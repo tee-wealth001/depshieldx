@@ -3,12 +3,17 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from depshieldx.npm_registry import check_provenance_batch, check_release
 
 
+@pytest.mark.live
 class NpmRegistryLiveTests(unittest.TestCase):
-    """Hits the real npm registry -- matches this suite's existing pattern for
-    provenance/CVE-source tests (test_provenance.py, test_threat_intel.py)."""
+    """Hits the real npm registry. Marked live -- excluded from the default CI
+    run (`pytest -m "not live"`) since it depends on a third-party service's
+    availability and data, unlike the rest of this suite which mocks network
+    calls (see test_provenance.py, test_threat_intel.py)."""
 
     def test_check_release_reports_real_attestations_for_sigstore(self):
         result = check_release("sigstore", "5.0.0")

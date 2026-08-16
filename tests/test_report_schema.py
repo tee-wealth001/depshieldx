@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from tests.fixture_packages import build_safe_wheel
@@ -30,9 +31,12 @@ class ReportSchemaTests(unittest.TestCase):
         payload = json.loads((FIXTURES_DIR / "scan_blocked.json").read_text(encoding="utf-8"))
         Draft202012Validator(_load_schema()).validate(payload)
 
+    @pytest.mark.live
     def test_live_scan_report_matches_schema(self):
         # Strongest drift check: run the real CLI and validate what it actually produces
-        # today, not just the golden fixtures captured at one point in time.
+        # today, not just the golden fixtures captured at one point in time. Marked live
+        # (excluded from default CI) since it touches real PyPI/OSV/GHSA/deps.dev -- the
+        # two golden-fixture tests above still run by default and cover the schema shape.
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             wheel = build_safe_wheel(root, package_name="fixturepkg", version="1.0.0")

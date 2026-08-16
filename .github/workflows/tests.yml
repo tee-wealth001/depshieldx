@@ -28,8 +28,30 @@ jobs:
       - name: Install package with dev dependencies
         run: python -m pip install -e ".[dev]"
 
-      - name: Run tests
+      - name: Run tests (excludes live-API tests, see the live job below)
         shell: bash
         run: |
           export DEPSHIELDX_CACHE_DIR="${{ runner.temp }}/depshieldx-test-cache"
-          python -m pytest -q -rs
+          python -m pytest -q -rs -m "not live"
+
+  test-live:
+    name: pytest live (real npm/PyPI/OSV/GHSA/deps.dev APIs, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run live-API tests
+        shell: bash
+        run: |
+          export DEPSHIELDX_CACHE_DIR="${{ runner.temp }}/depshieldx-test-cache"
+          python -m pytest -q -rs -m live

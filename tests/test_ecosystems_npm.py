@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from depshieldx.ecosystems import NPM_ECOSYSTEM
 
 # A minimal, real-shaped package-lock.json (lockfileVersion 3), matching the format
@@ -59,9 +61,12 @@ class NpmEcosystemResolveTests(unittest.TestCase):
         self.assertIsNotNone(resolution.resolution_error)
 
 
+@pytest.mark.live
 class NpmEcosystemLiveRegistryTests(unittest.TestCase):
-    """Hits the real npm registry, matching this suite's existing pattern of
-    verifying against real PyPI/provenance data rather than only mocks."""
+    """Hits the real npm registry. Marked live -- excluded from the default CI
+    run (`pytest -m "not live"`) since it depends on a third-party service's
+    availability and data, unlike the rest of this suite which mocks network
+    calls (see test_provenance.py, test_threat_intel.py)."""
 
     def test_check_provenance_reports_real_structural_signals(self):
         result = NPM_ECOSYSTEM.check_provenance({"left-pad": "1.3.0"})
