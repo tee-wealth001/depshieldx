@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from depshieldx.ui import build_ui_payload, serve_ui
+from depshieldx.presentation.web.payloads import build_ui_payload
+from depshieldx.presentation.web.server import serve_ui
 
 
 class UiTests(unittest.TestCase):
@@ -81,9 +82,9 @@ class UiTests(unittest.TestCase):
         self.assertEqual(payload["bundles"][0]["backend"], "docker")
         self.assertEqual(payload["provenance"][0]["package"], "fastapi")
 
-    @patch("depshieldx.ui._can_open_browser", return_value=True)
-    @patch("depshieldx.ui.webbrowser.open")
-    @patch("depshieldx.ui.create_ui_server")
+    @patch("depshieldx.presentation.web.server._can_open_browser", return_value=True)
+    @patch("depshieldx.presentation.web.server.webbrowser.open")
+    @patch("depshieldx.presentation.web.server.create_ui_server")
     def test_serve_ui_announces_url_and_closes_server(
         self,
         mock_create_ui_server,

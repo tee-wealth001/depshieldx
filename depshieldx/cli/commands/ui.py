@@ -1,6 +1,6 @@
 import click
 
-from ...ui import serve_ui
+from ...presentation.web.server import serve_ui
 
 
 @click.option(
