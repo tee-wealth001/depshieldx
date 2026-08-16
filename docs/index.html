@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>depshieldx – Secure Python Package Management</title>
+  <title>depshieldx – Secure Package Management for PyPI &amp; npm</title>
   <meta
     name="description"
-    content="Safer Python package install and scan workflows with provenance checks, CVE lookups, Docker plus Trivy deep mode, and signed receipts."
+    content="Safer package install and scan workflows for PyPI and npm/yarn/pnpm, with cryptographic provenance checks, CVE lookups, Docker plus Trivy deep mode with behavioral tracing, and signed receipts."
   />
   <style>
     * {
@@ -683,8 +683,8 @@
         <div class="hero-content">
           <div class="hero-text">
             <div class="badge">Security-First Package Management</div>
-            <h1>Install Python packages with confidence</h1>
-            <p>depshieldx adds a security gate in front of your package installation. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
+            <h1>Install PyPI and npm packages with confidence</h1>
+            <p>depshieldx adds a security gate in front of your package installation, for PyPI and npm/yarn/pnpm alike. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
             <div class="cta-buttons">
               <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
                 <span>Get Started</span>
@@ -732,11 +732,11 @@
           <div class="feature-card">
             <div class="feature-icon">🔍</div>
             <h3>Deep Dependency Analysis</h3>
-            <p>Resolves and checks your entire dependency tree, not just the package you're installing.</p>
+            <p>Resolves and checks your entire dependency tree, not just the package you're installing -- for PyPI or npm/yarn/pnpm.</p>
             <ul>
               <li>Full resolved package versions</li>
-              <li>PyPI provenance metadata</li>
-              <li>Attestation verification</li>
+              <li>PyPI and npm provenance metadata</li>
+              <li>Real Sigstore attestation verification</li>
             </ul>
           </div>
           <div class="feature-card">
@@ -753,9 +753,9 @@
           <div class="feature-card">
             <div class="feature-icon">🐳</div>
             <h3>Docker Sandbox Testing</h3>
-            <p>Run installations in an isolated Docker environment before touching your system.</p>
+            <p>Run installations in an isolated Docker environment before touching your system, for PyPI or npm/yarn/pnpm.</p>
             <ul>
-              <li>Safe installation testing</li>
+              <li>Real behavioral tracing of the install</li>
               <li>Trivy deep scanning</li>
               <li>Zero host impact</li>
             </ul>
@@ -773,10 +773,10 @@
           <div class="feature-card">
             <div class="feature-icon">🔄</div>
             <h3>Flexible Workflows</h3>
-            <p>Works with your existing Python dependency files and tools.</p>
+            <p>Works with your existing dependency files and tools, for either ecosystem.</p>
             <ul>
-              <li>requirements.txt</li>
-              <li>uv.lock & pyproject.toml</li>
+              <li>requirements.txt, uv.lock & pyproject.toml</li>
+              <li>package-lock.json, yarn.lock & pnpm-lock.yaml</li>
               <li>Direct package names</li>
             </ul>
           </div>
@@ -833,7 +833,7 @@
           <div class="mode-card deep">
             <div class="mode-badge">DEEP MODE</div>
             <h3>🔒 Deep Mode</h3>
-            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system.</p>
+            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system -- for PyPI or npm/yarn/pnpm.</p>
             <p style="font-size: 0.9rem; color: var(--text-muted);">Maximum security with full isolation and behavioral analysis.</p>
             <div class="code-example">depshieldx install requests --deep</div>
           </div>
@@ -862,6 +862,9 @@
             </div>
             <div class="command-item">
               <code>scan --pyproject pyproject.toml --deep</code>
+            </div>
+            <div class="command-item">
+              <code>install left-pad --ecosystem npm --deep</code>
             </div>
           </div>
           <div class="command-card">
@@ -907,8 +910,8 @@
     <!-- CTA Section -->
     <section class="cta-section">
       <div class="container">
-        <h2>Ready to secure your Python packages?</h2>
-        <p>Join developers who are taking control of their supply chain security. Get started with depshieldx today.</p>
+        <h2>Ready to secure your packages?</h2>
+        <p>Join developers who are taking control of their supply chain security, for PyPI and npm alike. Get started with depshieldx today.</p>
         <div class="cta-buttons" style="justify-content: center;">
           <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
             View on GitHub
@@ -923,7 +926,7 @@
 
   <footer>
     <div class="container">
-      <p>depshieldx • Securing Python's supply chain, one package at a time • Apache License 2.0 • <a href="https://github.com/tee-wealth001/depshieldx" style="color: var(--accent); text-decoration: none;">Source on GitHub</a></p>
+      <p>depshieldx • Securing your supply chain, one package at a time • Apache License 2.0 • <a href="https://github.com/tee-wealth001/depshieldx" style="color: var(--accent); text-decoration: none;">Source on GitHub</a></p>
     </div>
   </footer>
 

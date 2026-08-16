@@ -33,6 +33,19 @@ class UiTests(unittest.TestCase):
             }
             (receipts_root / "receipt.json").write_text(json.dumps(receipt_payload))
 
+            npm_receipt_payload = {
+                "receipt_id": "receipt456",
+                "created_at": "2026-03-31T13:48:19+00:00",
+                "decision": "allowed",
+                "ecosystem": "npm",
+                "package": "left-pad",
+                "package_version": "1.3.0",
+                "mode": "fast",
+                "requested_target": "left-pad",
+                "summary": {},
+            }
+            (receipts_root / "receipt-npm.json").write_text(json.dumps(npm_receipt_payload))
+
             bundle_dir = cache_root / "bundlefingerprint"
             bundle_dir.mkdir()
             (bundle_dir / "depshieldx-lock.txt").write_text("fastapi==0.135.2\n")
@@ -75,10 +88,12 @@ class UiTests(unittest.TestCase):
             ):
                 payload = build_ui_payload()
 
-        self.assertEqual(payload["summary"]["receipt_count"], 1)
+        self.assertEqual(payload["summary"]["receipt_count"], 2)
         self.assertEqual(payload["summary"]["bundle_count"], 1)
         self.assertEqual(payload["summary"]["provenance_count"], 1)
-        self.assertEqual(payload["receipts"][0]["package"], "fastapi")
+        receipts_by_package = {row["package"]: row for row in payload["receipts"]}
+        self.assertEqual(receipts_by_package["fastapi"]["ecosystem"], "pypi")
+        self.assertEqual(receipts_by_package["left-pad"]["ecosystem"], "npm")
         self.assertEqual(payload["bundles"][0]["backend"], "docker")
         self.assertEqual(payload["provenance"][0]["package"], "fastapi")
 
