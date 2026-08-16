@@ -1,0 +1,98 @@
+{
+  "ecosystem": "pypi",
+  "environment": {
+    "block": false,
+    "pip": {
+      "error": null,
+      "ok": true,
+      "required": "pip>=25.3",
+      "version": "26.0.1"
+    },
+    "python": {
+      "ok": true,
+      "required": "Python>=3.11.4",
+      "version": "3.14.4"
+    },
+    "reason": null
+  },
+  "install": {
+    "attempted": false,
+    "blocked": true,
+    "reason": "provenance",
+    "success": false
+  },
+  "mode": "fast",
+  "operation": "scan",
+  "package": "badpkg",
+  "provenance": {
+    "block": true,
+    "details": [
+      {
+        "block": true,
+        "infos": [],
+        "package": "badpkg",
+        "reason": "resolved release is yanked on PyPI",
+        "signals": {"unavailable": false},
+        "version": "1.0.0",
+        "warnings": []
+      }
+    ],
+    "infos": [],
+    "reason": "badpkg==1.0.0 resolved release is yanked on PyPI",
+    "warnings": []
+  },
+  "receipt": {
+    "decision": "blocked",
+    "path": "/home/user/.depshieldx-cache/receipts/20260816T010128Z-badpkg-1.0.0-a1b2c3d4e5f6a7b8.json",
+    "receipt_id": "a1b2c3d4e5f6a7b8",
+    "signature": "9c8b7a6d5e4f3021908a7b6c5d4e3f2019a8b7c6d5e4f3021908a7b6c5d4e3f2"
+  },
+  "requested_at": "2026-08-16T01:01:26.643287+00:00",
+  "resolution": {
+    "install_target": "badpkg==1.0.0",
+    "package_records": [
+      {
+        "digest": "abc123def456abc123def456abc123def456abc123def456abc123def45601",
+        "direct": true,
+        "ecosystem": "pypi",
+        "name": "badpkg",
+        "purl": "pkg:pypi/badpkg@1.0.0",
+        "source": "pypi.org",
+        "version": "1.0.0"
+      }
+    ],
+    "packages": ["badpkg"],
+    "requested_targets": ["badpkg"],
+    "resolution_error": null,
+    "resolution_succeeded": true,
+    "resolved_versions": {"badpkg": "1.0.0"},
+    "selected_artifacts": {
+      "badpkg": [
+        {
+          "digests": {"sha256": "abc123def456abc123def456abc123def456abc123def456abc123def45601"},
+          "filename": "badpkg-1.0.0-py3-none-any.whl",
+          "packagetype": "bdist_wheel",
+          "url": "https://files.pythonhosted.org/packages/badpkg-1.0.0-py3-none-any.whl"
+        }
+      ]
+    },
+    "source_type": "package"
+  },
+  "sandbox": null,
+  "scan": {
+    "block": false,
+    "infos": [],
+    "threat_intelligence": {
+      "cisa_kev": {"hits": [], "source": "cisa-kev", "unverified_hits": [], "warnings": []},
+      "deps_dev": {"hits": [], "source": "deps_dev", "warnings": []},
+      "github_advisories": {"hits": [], "source": "github_advisories", "warnings": []},
+      "hits": [],
+      "multi_source_cves": {"badpkg": {"current": [], "historical": [], "unverified": []}},
+      "osv": {"hits": [], "source": "osv", "warnings": []},
+      "sources": [],
+      "trivy": null
+    },
+    "warnings": []
+  },
+  "schema_version": "1"
+}

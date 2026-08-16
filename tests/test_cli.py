@@ -513,7 +513,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(exit_code, EXIT_BLOCKED)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_returns_blocked_exit_code(
         self,
         mock_resolve,
@@ -538,7 +538,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertNotIn("Report\n{", result.output)
 
     @patch("depshieldx.cli.scan_vulnerabilities")
-    @patch("depshieldx.cli.check_provenance_batch", side_effect=SystemExit(0))
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.check_provenance", side_effect=SystemExit(0))
     def test_run_fast_checks_converts_system_exit_into_blocked_provenance_result(
         self,
         _mock_provenance,
@@ -563,7 +563,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertFalse(scan_result["block"])
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_blocks_on_resolution_failure(
         self,
         mock_resolve,
@@ -590,7 +590,7 @@ class FormatSummaryTests(unittest.TestCase):
         mock_fast_checks.assert_not_called()
 
     @patch("depshieldx.cli._runtime_environment_report")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_blocks_when_runtime_prerequisites_are_not_met(
         self,
         mock_resolve,
@@ -622,8 +622,8 @@ class FormatSummaryTests(unittest.TestCase):
         mock_serve_ui.assert_called_once_with(port=8123, open_browser=False, echo=ANY)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
-    @patch("depshieldx.cli._host_install_command_for_resolution")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
     @patch("depshieldx.cli._run_cli_command")
     def test_cli_install_groups_warning_and_info_output(
         self,
@@ -664,7 +664,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertNotIn("Policy Info:", result.output)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_install_inputs")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_scan_supports_requirements_file(
         self,
         mock_resolve_install_inputs,
@@ -698,7 +698,7 @@ class FormatSummaryTests(unittest.TestCase):
 
     @patch("depshieldx.cli._run_fast_checks")
     @patch("depshieldx.cli.run_sandbox")
-    @patch("depshieldx.cli.resolve_install_inputs")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_scan_deep_supports_pyproject_file(
         self,
         mock_resolve_install_inputs,
@@ -744,7 +744,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Host install: skipped (scan_only)", result.output)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_full_report_includes_json_block(
         self,
         mock_resolve,
@@ -771,7 +771,7 @@ class FormatSummaryTests(unittest.TestCase):
     @patch("depshieldx.cli.requests.get")
     @patch("depshieldx.cli._run_cli_command")
     @patch("depshieldx.cli.run_sandbox")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_deep_install_uses_host_pip_after_trivy_passes(
         self,
         mock_resolve,
@@ -833,7 +833,7 @@ class FormatSummaryTests(unittest.TestCase):
         mock_requests_get.side_effect = [flask_resp, werkzeug_resp]
 
         runner = CliRunner()
-        with patch("depshieldx.cli.hashlib.sha256") as mock_sha256:
+        with patch("depshieldx.ecosystems.hashlib.sha256") as mock_sha256:
             mock_sha256.side_effect = [
                 Mock(hexdigest=Mock(return_value="sha-flask")),
                 Mock(hexdigest=Mock(return_value="sha-werkzeug")),
@@ -843,9 +843,9 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_OK)
         self.assertIn("Trivy verdict: passed (0 finding(s))", result.output)
         install_command = mock_run_cli.call_args.args[0]
-        self.assertEqual(install_command[:3], ["pip", "install", "--no-deps"])
+        self.assertEqual(install_command[:5], [sys.executable, "-m", "pip", "install", "--no-deps"])
         self.assertEqual(
-            [Path(value).name for value in install_command[3:]],
+            [Path(value).name for value in install_command[5:]],
             ["Flask-3.1.3-py3-none-any.whl", "Werkzeug-3.1.7-py3-none-any.whl"],
         )
         self.assertEqual(mock_run_cli.call_args.kwargs, {"verbose": False})
@@ -853,7 +853,7 @@ class FormatSummaryTests(unittest.TestCase):
     @patch("depshieldx.cli._run_fast_checks")
     @patch("depshieldx.cli._run_cli_command")
     @patch("depshieldx.cli.run_sandbox")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_deep_install_blocks_on_trivy(
         self,
         mock_resolve,
@@ -901,7 +901,7 @@ class FormatSummaryTests(unittest.TestCase):
 
     @patch("depshieldx.cli._run_fast_checks")
     @patch("depshieldx.cli.run_sandbox")
-    @patch("depshieldx.cli.resolve_dependencies")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_deep_install_blocks_on_preinstall_vulnerability(
         self,
         mock_resolve,
@@ -973,8 +973,8 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(exit_code, EXIT_OK)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
-    @patch("depshieldx.cli._host_install_command_for_resolution")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
     @patch("depshieldx.cli._run_cli_command")
     @patch("depshieldx.cli.enable_routing_shim")
     def test_cli_install_enable_routing_flag_enables_shim(
@@ -1008,8 +1008,8 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("pip routing enabled", result.output)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
-    @patch("depshieldx.cli._host_install_command_for_resolution")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
     @patch("depshieldx.cli._run_cli_command")
     @patch("depshieldx.cli.disable_routing_shim")
     def test_cli_install_disable_routing_flag_disables_shim(
@@ -1141,8 +1141,8 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn('Activation: export PATH="/tmp/shims:$PATH"', echoed_lines)
 
     @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.resolve_dependencies")
-    @patch("depshieldx.cli._host_install_command_for_resolution")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
     @patch("depshieldx.cli._run_cli_command")
     @patch("depshieldx.cli._finalize_routing_after_install")
     @patch("depshieldx.cli._prepare_routing_for_install")
@@ -1273,7 +1273,9 @@ class FormatSummaryTests(unittest.TestCase):
         result = runner.invoke(cli, ["uninstall", "langchain", "requests"])
 
         self.assertEqual(result.exit_code, EXIT_OK)
-        mock_run_cli.assert_called_once_with(["pip", "uninstall", "-y", "langchain", "requests"], verbose=False)
+        mock_run_cli.assert_called_once_with(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "langchain", "requests"], verbose=False
+        )
         self.assertIn("Uninstall completed.", result.output)
 
     @patch("depshieldx.cli._run_cli_command")
@@ -1295,5 +1297,7 @@ class FormatSummaryTests(unittest.TestCase):
             result = runner.invoke(cli, ["uninstall", "-r", "requirements.txt"])
 
         self.assertEqual(result.exit_code, EXIT_OK)
-        mock_run_cli.assert_called_once_with(["pip", "uninstall", "-y", "-r", "requirements.txt"], verbose=False)
+        mock_run_cli.assert_called_once_with(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "-r", "requirements.txt"], verbose=False
+        )
         self.assertIn("Removed packages listed in requirements.txt.", result.output)
