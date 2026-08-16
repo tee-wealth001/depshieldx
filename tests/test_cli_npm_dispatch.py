@@ -48,27 +48,38 @@ class CliNpmDispatchTests(unittest.TestCase):
         self.assertEqual(payload["resolution"]["resolved_versions"]["left-pad"], "1.3.0")
         self.assertEqual(payload["resolution"]["package_records"][0]["purl"], "pkg:npm/left-pad@1.3.0")
 
-    def test_install_deep_rejected_for_npm_lockfile(self):
+    @patch("depshieldx.cli.engine.run_sandbox")
+    @patch("depshieldx.cli.engine._run_fast_checks")
+    def test_scan_deep_runs_sandbox_with_npm_ecosystem_for_npm_lockfile(self, mock_run_fast_checks, mock_run_sandbox):
+        from depshieldx.sandbox import SandboxResult
+
+        mock_run_fast_checks.return_value = (
+            {"block": False, "reason": None},
+            {"block": False, "reason": None},
+        )
+        mock_run_sandbox.return_value = SandboxResult(
+            success=True,
+            downloaded_files=["left-pad-1.3.0.tgz"],
+            error=None,
+            error_type=None,
+            isolation={"backend": "docker", "image": "node:20"},
+            evidence={},
+            static_analysis={"blocked": False, "findings": []},
+            bundle=None,
+            cache={"hit": False, "fingerprint": "abc"},
+            trivy_results={"scanned": True, "should_block": False},
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             lockfile = Path(temp_dir) / "package-lock.json"
             lockfile.write_text(json.dumps(SAMPLE_PACKAGE_LOCK_JSON), encoding="utf-8")
 
             runner = CliRunner()
-            result = runner.invoke(cli, ["install", "--lockfile", str(lockfile), "--deep"])
-
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("not supported yet", str(result.output) + str(result.exception))
-
-    def test_scan_deep_rejected_for_npm_lockfile(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            lockfile = Path(temp_dir) / "yarn.lock"
-            lockfile.write_text("# yarn lockfile v1\n", encoding="utf-8")
-
-            runner = CliRunner()
             result = runner.invoke(cli, ["scan", "--lockfile", str(lockfile), "--deep"])
 
-        self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("not supported yet", str(result.output) + str(result.exception))
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue(mock_run_sandbox.called)
+        _, call_kwargs = mock_run_sandbox.call_args
+        self.assertEqual(call_kwargs["ecosystem"].name, "npm")
 
     @pytest.mark.live
     def test_scan_bare_package_with_ecosystem_npm_flag(self):

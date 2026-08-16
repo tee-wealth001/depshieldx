@@ -1,6 +1,5 @@
 import click
 
-from ...ecosystems import PYPI_ECOSYSTEM
 from ..engine import (
     _ecosystem_for_input_source,
     _handle_resolution_failure,
@@ -81,10 +80,6 @@ def install(
     )
     package_name = input_source.label
     ecosystem = _ecosystem_for_input_source(input_source)
-    if deep and ecosystem is not PYPI_ECOSYSTEM:
-        raise click.UsageError(
-            f"--deep is not supported yet for the {ecosystem.name} ecosystem (fast mode only in this phase)"
-        )
 
     report = _build_report(package_name, mode, "install", ecosystem=ecosystem)
     report["_show_historical_details"] = verbose or output_mode == "both"
@@ -110,6 +105,7 @@ def install(
                 verbose=verbose,
                 enable_routing=enable_routing,
                 disable_routing=disable_routing,
+                ecosystem=ecosystem,
             )
             return
         _run_fast_flow(

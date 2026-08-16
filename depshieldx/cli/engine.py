@@ -365,13 +365,14 @@ def _run_deep_flow(
     verbose=False,
     enable_routing=False,
     disable_routing=False,
+    ecosystem=PYPI_ECOSYSTEM,
 ):
     with _stage_loader(
         "Checking provenance and vulnerability sources for the resolved package set...",
         verbose=verbose,
         animated=False,
     ):
-        provenance_result, scan_result = _run_fast_checks(resolution, verbose=verbose)
+        provenance_result, scan_result = _run_fast_checks(resolution, ecosystem=ecosystem, verbose=verbose)
     report["provenance"] = provenance_result
     report["scan"] = scan_result
     if provenance_result["block"]:
@@ -405,6 +406,7 @@ def _run_deep_flow(
             require_docker=True,
             block_on_static_analysis=False,
             block_on_trivy=True,
+            ecosystem=ecosystem,
         )
     report["sandbox"] = _sandbox_report(sandbox_result)
 
@@ -450,6 +452,7 @@ def _run_deep_flow(
         enable_routing,
         disable_routing,
         output_mode,
-        source="host_pip",
+        source="host_pip" if ecosystem is PYPI_ECOSYSTEM else "host_npm",
+        ecosystem=ecosystem,
     )
     _finish(report, output_mode)

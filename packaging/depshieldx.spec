@@ -22,6 +22,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(REPO_ROOT, "depshieldx", "sandbox_wrapper.py"), "."),
+        (os.path.join(REPO_ROOT, "depshieldx", "sandbox_wrapper_npm.js"), "."),
         (
             os.path.join(REPO_ROOT, "depshieldx", "presentation", "web", "templates", "dashboard.html"),
             "presentation/web/templates",
