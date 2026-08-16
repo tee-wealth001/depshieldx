@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from depshieldx.cli import EXIT_OK, cli
+from depshieldx.cli import cli
+from depshieldx.cli.output import EXIT_OK
 from depshieldx.sandbox import run_sandbox
 from tests.fixture_packages import build_malicious_native_wheel, build_safe_native_wheel, build_safe_wheel
 
