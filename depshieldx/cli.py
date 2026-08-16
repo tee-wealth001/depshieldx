@@ -16,7 +16,7 @@ import click
 from packaging.version import InvalidVersion, Version
 import requests
 
-from .ecosystems import PYPI_ECOSYSTEM, package_records
+from .ecosystems import PYPI_ECOSYSTEM, ecosystem_for_name, package_records, resolve_node_tool
 from .input_sources import load_input_source
 from .receipts import ReceiptUnavailableError, delete_receipts, list_receipts, verify_receipt, write_receipt
 from .runtime import pip_command, self_invoke_command
@@ -926,8 +926,12 @@ def _load_cli_input(targets, requirement_file=None, lockfile=None, pyproject_fil
         raise click.UsageError(str(exc)) from exc
 
 
-def _resolve_input_source(input_source):
-    return PYPI_ECOSYSTEM.resolve(
+def _ecosystem_for_input_source(input_source):
+    return ecosystem_for_name(input_source.ecosystem)
+
+
+def _resolve_input_source(input_source, ecosystem):
+    return ecosystem.resolve(
         input_source.pip_args,
         input_source.requested_targets,
         input_source.label,
@@ -979,7 +983,7 @@ def _handle_resolution_failure(report, resolution, output_mode):
     _finish(report, output_mode)
 
 
-def _run_fast_checks(resolution, verbose=False):
+def _run_fast_checks(resolution, ecosystem=PYPI_ECOSYSTEM, verbose=False):
     def _provenance_failure(exc):
         message = str(exc).strip() or exc.__class__.__name__
         return {
@@ -1018,7 +1022,7 @@ def _run_fast_checks(resolution, verbose=False):
     with ThreadPoolExecutor(max_workers=2) as executor:
         provenance_future = executor.submit(
             _run_guarded,
-            PYPI_ECOSYSTEM.check_provenance,
+            ecosystem.check_provenance,
             _provenance_failure,
             resolution.resolved_versions,
             selected_artifacts=resolution.selected_artifacts,
@@ -1030,15 +1034,15 @@ def _run_fast_checks(resolution, verbose=False):
             _scan_failure,
             resolution.packages,
             resolved_versions=resolution.resolved_versions,
-            ecosystem=PYPI_ECOSYSTEM.name,
+            ecosystem=ecosystem.name,
         )
         return provenance_future.result(), scan_future.result()
 
 
-def _build_report(package_name, mode, operation):
+def _build_report(package_name, mode, operation, ecosystem=PYPI_ECOSYSTEM):
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "ecosystem": PYPI_ECOSYSTEM.name,
+        "ecosystem": ecosystem.name,
         "package": package_name,
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
@@ -1100,11 +1104,12 @@ def _perform_host_install(
     disable_routing,
     output_mode,
     source=None,
+    ecosystem=PYPI_ECOSYSTEM,
 ):
     routing_status = _prepare_routing_for_install(package_name, enable_routing, disable_routing)
     try:
         with _stage_loader("Installing resolved package set on host...", verbose=verbose):
-            with PYPI_ECOSYSTEM.host_install_command(resolution) as install_command:
+            with ecosystem.host_install_command(resolution) as install_command:
                 _run_cli_command(install_command, verbose=verbose)
         report["install"] = {
             "attempted": True,
@@ -1136,13 +1141,14 @@ def _run_fast_flow(
     verbose=False,
     enable_routing=False,
     disable_routing=False,
+    ecosystem=PYPI_ECOSYSTEM,
 ):
     with _stage_loader(
         "Checking provenance and vulnerability sources for the resolved package set...",
         verbose=verbose,
         animated=False,
     ):
-        provenance_result, scan_result = _run_fast_checks(resolution, verbose=verbose)
+        provenance_result, scan_result = _run_fast_checks(resolution, ecosystem=ecosystem, verbose=verbose)
     report["provenance"] = provenance_result
     report["scan"] = scan_result
 
@@ -1182,6 +1188,7 @@ def _run_fast_flow(
         enable_routing,
         disable_routing,
         output_mode,
+        ecosystem=ecosystem,
     )
     _finish(report, output_mode)
 
@@ -1345,14 +1352,19 @@ def install(
         pyproject_file=pyproject_file,
     )
     package_name = input_source.label
+    ecosystem = _ecosystem_for_input_source(input_source)
+    if deep and ecosystem is not PYPI_ECOSYSTEM:
+        raise click.UsageError(
+            f"--deep is not supported yet for the {ecosystem.name} ecosystem (fast mode only in this phase)"
+        )
 
-    report = _build_report(package_name, mode, "install")
+    report = _build_report(package_name, mode, "install", ecosystem=ecosystem)
     report["_show_historical_details"] = verbose or output_mode == "both"
 
     try:
         _enforce_runtime_prerequisites(report, output_mode)
         with _stage_loader(f"Resolving dependencies for {package_name}...", verbose=verbose):
-            resolution = _resolve_input_source(input_source)
+            resolution = _resolve_input_source(input_source, ecosystem)
         _record_resolution(report, resolution)
         if not resolution.resolution_succeeded:
             _handle_resolution_failure(report, resolution, output_mode)
@@ -1381,6 +1393,7 @@ def install(
             verbose=verbose,
             enable_routing=enable_routing,
             disable_routing=disable_routing,
+            ecosystem=ecosystem,
         )
     except SystemExit:
         raise
@@ -1428,13 +1441,19 @@ def scan(targets, requirement_file, lockfile, pyproject_file, fast, deep, no_cac
         pyproject_file=pyproject_file,
     )
     package_name = input_source.label
-    report = _build_report(package_name, mode, "scan")
+    ecosystem = _ecosystem_for_input_source(input_source)
+    if deep and ecosystem is not PYPI_ECOSYSTEM:
+        raise click.UsageError(
+            f"--deep is not supported yet for the {ecosystem.name} ecosystem (fast mode only in this phase)"
+        )
+
+    report = _build_report(package_name, mode, "scan", ecosystem=ecosystem)
     report["_show_historical_details"] = verbose or output_mode == "both"
 
     try:
         _enforce_runtime_prerequisites(report, output_mode)
         with _stage_loader(f"Resolving dependencies for {package_name}...", verbose=verbose):
-            resolution = _resolve_input_source(input_source)
+            resolution = _resolve_input_source(input_source, ecosystem)
         _record_resolution(report, resolution)
         if not resolution.resolution_succeeded:
             _handle_resolution_failure(report, resolution, output_mode)
@@ -1458,6 +1477,7 @@ def scan(targets, requirement_file, lockfile, pyproject_file, fast, deep, no_cac
             output_mode,
             do_install=False,
             verbose=verbose,
+            ecosystem=ecosystem,
         )
     except SystemExit:
         raise
@@ -1479,12 +1499,18 @@ def uninstall(targets, requirement_file, lockfile, pyproject_file, verbose):
         lockfile=lockfile,
         pyproject_file=pyproject_file,
     )
+    ecosystem = _ecosystem_for_input_source(input_source)
+    if ecosystem is not PYPI_ECOSYSTEM:
+        raise click.UsageError(
+            f"uninstall is not supported yet for the {ecosystem.name} ecosystem "
+            f"(npm's lockfile-implied uninstall semantics need their own design pass)"
+        )
     uninstall_args = _uninstall_args_for_input_source(input_source)
     if not uninstall_args:
         raise click.UsageError("Could not determine which packages to uninstall")
 
     with _stage_loader(f"Uninstalling packages for {input_source.label}...", verbose=verbose):
-        _run_cli_command(PYPI_ECOSYSTEM.uninstall_command(uninstall_args), verbose=verbose)
+        _run_cli_command(ecosystem.uninstall_command(uninstall_args), verbose=verbose)
     _echo_success("Uninstall completed.")
     if requirement_file:
         click.echo(f"Removed packages listed in {input_source.label}.")
@@ -1598,6 +1624,66 @@ def route_pip(pip_args):
     )
     result = subprocess.run(pip_command(args), check=False)
     raise SystemExit(result.returncode)
+
+
+# manager -> its lockfile name, used to auto-detect what to scan when the shim
+# intercepts a plain "install everything from the lockfile in cwd" command.
+NPM_FAMILY_LOCKFILES = {
+    "npm": "package-lock.json",
+    "yarn": "yarn.lock",
+    "pnpm": "pnpm-lock.yaml",
+}
+
+
+def _is_plain_npm_family_install(args):
+    # Only intercept a bare "install"/"i"/"ci" with no specific package named --
+    # NpmEcosystem's resolve() only supports lockfile-based resolution in this
+    # phase, not resolving an ad-hoc new package the way "npm install left-pad"
+    # would need. Anything else passes through untouched, same principle as the
+    # pip shim only intercepting "pip install <single-package>".
+    if not args or args[0] not in ("install", "i", "ci"):
+        return False
+    return all(arg.startswith("-") for arg in args[1:])
+
+
+def _route_npm_family(manager, args):
+    lockfile_name = NPM_FAMILY_LOCKFILES[manager]
+    lockfile_path = Path.cwd() / lockfile_name
+    if _is_plain_npm_family_install(args) and lockfile_path.exists():
+        click.echo(f"Routing {manager} install through depshieldx...")
+        command = self_invoke_command(["install", "--lockfile", str(lockfile_path)])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        f"depshieldx routing only intercepts a plain '{manager} install' when {lockfile_name} is present. "
+        f"Passing through to {manager}.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_node_tool(manager), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
+@cli.command("route-npm", hidden=True, context_settings={"ignore_unknown_options": True})
+@click.argument("manager_args", nargs=-1, type=click.UNPROCESSED)
+def route_npm(manager_args):
+    """Internal helper used by the optional npm shim."""
+    _route_npm_family("npm", list(manager_args))
+
+
+@cli.command("route-yarn", hidden=True, context_settings={"ignore_unknown_options": True})
+@click.argument("manager_args", nargs=-1, type=click.UNPROCESSED)
+def route_yarn(manager_args):
+    """Internal helper used by the optional yarn shim."""
+    _route_npm_family("yarn", list(manager_args))
+
+
+@cli.command("route-pnpm", hidden=True, context_settings={"ignore_unknown_options": True})
+@click.argument("manager_args", nargs=-1, type=click.UNPROCESSED)
+def route_pnpm(manager_args):
+    """Internal helper used by the optional pnpm shim."""
+    _route_npm_family("pnpm", list(manager_args))
 
 
 if __name__ == "__main__":

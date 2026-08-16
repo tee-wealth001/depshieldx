@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import tomllib
 
+NPM_LOCKFILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+
 
 @dataclass
 class InputSource:
@@ -9,6 +11,7 @@ class InputSource:
     label: str
     requested_targets: list[str]
     pip_args: list[str]
+    ecosystem: str = "pypi"
 
 
 def _parse_requirements_file(path: str) -> list[str]:
@@ -76,13 +79,24 @@ def load_input_source(
             pip_args=["-r", requirement_file],
         )
     if lockfile:
-        if Path(lockfile).name == "uv.lock":
+        lockfile_name = Path(lockfile).name
+        if lockfile_name in NPM_LOCKFILE_NAMES:
+            # NpmEcosystem.resolve() parses the lockfile itself (offline, no pip-style
+            # dry-run needed), so the raw path is passed through unparsed here.
+            return InputSource(
+                source_type="lockfile",
+                label=lockfile_name,
+                requested_targets=[lockfile],
+                pip_args=[],
+                ecosystem="npm",
+            )
+        if lockfile_name == "uv.lock":
             requested_targets = _parse_uv_lock(lockfile)
         else:
             requested_targets = _parse_requirements_file(lockfile)
         return InputSource(
             source_type="lockfile",
-            label=Path(lockfile).name,
+            label=lockfile_name,
             requested_targets=requested_targets,
             pip_args=requested_targets[:],
         )

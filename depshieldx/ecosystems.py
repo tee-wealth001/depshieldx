@@ -221,16 +221,34 @@ class PyPiEcosystem:
 PYPI_ECOSYSTEM = PyPiEcosystem()
 
 
+def resolve_node_tool(name: str) -> str:
+    """Resolve an npm/yarn/pnpm-style Node.js tool via PATH.
+
+    On Windows these ship as .cmd shims (npm.cmd, not npm), which Python's
+    subprocess -- unlike a real shell -- will not find from a bare "npm"
+    argument: CreateProcess doesn't search PATHEXT the way cmd.exe does.
+    shutil.which() does the same PATHEXT-aware search a shell would, so it
+    correctly returns the .cmd path on Windows and the plain name on POSIX.
+    Reproduced directly: subprocess.run(["npm", ...]) raised
+    "[WinError 2] The system cannot find the file specified" even with npm
+    genuinely installed and on PATH.
+    """
+    resolved = shutil.which(name)
+    if not resolved:
+        raise RuntimeError(f"{name!r} was not found on PATH. Install Node.js/{name} to use the npm ecosystem.")
+    return resolved
+
+
 class NpmEcosystem:
     """The npm/yarn/pnpm ecosystem adapter (Phase 1, fast mode).
 
     Provenance checks are structural only -- see npm_registry.py's module
     docstring for why full Sigstore bundle verification isn't done here yet.
 
-    npm itself is a separate runtime (Node.js), invoked as a bare "npm"
-    command found via PATH -- unlike pip, this has nothing to do with
-    depshieldx's own frozen/non-frozen state, so runtime.py's Python
-    interpreter resolution doesn't apply here.
+    npm itself is a separate runtime (Node.js) -- unlike pip, this has
+    nothing to do with depshieldx's own frozen/non-frozen state, so
+    runtime.py's Python interpreter resolution doesn't apply here. It still
+    needs its own PATH resolution, though -- see resolve_node_tool.
     """
 
     name = "npm"
@@ -344,10 +362,22 @@ class NpmEcosystem:
             yield self.install_command([])
 
     def install_command(self, artifact_paths: list[str]) -> list[str]:
-        return ["npm", "install"]
+        return [resolve_node_tool("npm"), "install"]
 
     def uninstall_command(self, package_names: list[str]) -> list[str]:
-        return ["npm", "uninstall", *package_names]
+        return [resolve_node_tool("npm"), "uninstall", *package_names]
 
 
 NPM_ECOSYSTEM = NpmEcosystem()
+
+ECOSYSTEMS: dict[str, Ecosystem] = {
+    PYPI_ECOSYSTEM.name: PYPI_ECOSYSTEM,
+    NPM_ECOSYSTEM.name: NPM_ECOSYSTEM,
+}
+
+
+def ecosystem_for_name(name: str) -> Ecosystem:
+    try:
+        return ECOSYSTEMS[name]
+    except KeyError:
+        raise ValueError(f"unknown ecosystem: {name!r} (known: {sorted(ECOSYSTEMS)})") from None

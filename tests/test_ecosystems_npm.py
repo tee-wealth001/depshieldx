@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from depshieldx.ecosystems import NPM_ECOSYSTEM
 
@@ -91,6 +92,32 @@ class NpmEcosystemLiveRegistryTests(unittest.TestCase):
             destination = NPM_ECOSYSTEM.fetch_artifact(artifact, Path(temp_dir))
             self.assertTrue(destination.exists())
             self.assertGreater(destination.stat().st_size, 0)
+
+
+class NpmToolResolutionTests(unittest.TestCase):
+    """Regression coverage for a real bug: subprocess.run(["npm", ...]) fails on
+    Windows with WinError 2 even when npm is genuinely installed, because npm
+    ships as npm.cmd and Python's subprocess (unlike a shell) won't find a .cmd
+    shim from a bare "npm" argument."""
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value=r"C:\Program Files\nodejs\npm.cmd")
+    def test_install_command_uses_resolved_path_not_bare_name(self, mock_which):
+        command = NPM_ECOSYSTEM.install_command([])
+
+        mock_which.assert_called_with("npm")
+        self.assertEqual(command[0], r"C:\Program Files\nodejs\npm.cmd")
+        self.assertNotEqual(command[0], "npm")
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    def test_uninstall_command_uses_resolved_path(self, _mock_which):
+        command = NPM_ECOSYSTEM.uninstall_command(["left-pad"])
+
+        self.assertEqual(command, ["/usr/local/bin/npm", "uninstall", "left-pad"])
+
+    @patch("depshieldx.ecosystems.shutil.which", return_value=None)
+    def test_raises_clear_error_when_npm_not_on_path(self, _mock_which):
+        with self.assertRaises(RuntimeError):
+            NPM_ECOSYSTEM.install_command([])
 
 
 if __name__ == "__main__":

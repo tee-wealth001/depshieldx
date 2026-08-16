@@ -78,6 +78,30 @@ class RoutingTests(unittest.TestCase):
                 self.assertTrue(status["enabled"])
                 self.assertTrue(status["shim_path"].endswith("pip.bat"))
 
+    def test_enable_routing_also_writes_npm_family_shims(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": temp_dir}, clear=False):
+                with patch("depshieldx.routing._is_windows", return_value=False):
+                    status = enable_routing()
+                    shim_dir = Path(status["shim_path"]).parent
+
+                    for tool in ("npm", "yarn", "pnpm"):
+                        tool_shim = shim_dir / tool
+                        self.assertTrue(tool_shim.exists(), f"{tool} shim missing")
+                        self.assertEqual(tool_shim.read_text(), f'#!/bin/sh\nexec depshieldx route-{tool} "$@"\n')
+
+    def test_disable_routing_removes_npm_family_shims_too(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": temp_dir}, clear=False):
+                with patch("depshieldx.routing._is_windows", return_value=False):
+                    status = enable_routing()
+                    shim_dir = Path(status["shim_path"]).parent
+
+                    disable_routing()
+
+                    for tool in ("pip", "npm", "yarn", "pnpm"):
+                        self.assertFalse((shim_dir / tool).exists(), f"{tool} shim should have been removed")
+
 
 if __name__ == "__main__":
     unittest.main()
