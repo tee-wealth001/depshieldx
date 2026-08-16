@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -97,7 +98,7 @@ class CliNpmDispatchTests(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Invalid value", result.output)
 
-    def test_uninstall_rejected_for_npm_lockfile(self):
+    def test_uninstall_npm_lockfile_without_package_json_fails_clearly(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             lockfile = Path(temp_dir) / "pnpm-lock.yaml"
             lockfile.write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
@@ -106,7 +107,41 @@ class CliNpmDispatchTests(unittest.TestCase):
             result = runner.invoke(cli, ["uninstall", "--lockfile", str(lockfile)])
 
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("not supported yet", str(result.output) + str(result.exception))
+        self.assertIn("no package.json found", str(result.output) + str(result.exception))
+
+    @patch("depshieldx.cli.commands.uninstall._run_cli_command")
+    def test_uninstall_npm_lockfile_uses_direct_dependencies_from_package_json(self, mock_run_cli):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lockfile = Path(temp_dir) / "package-lock.json"
+            lockfile.write_text(json.dumps(SAMPLE_PACKAGE_LOCK_JSON), encoding="utf-8")
+            (Path(temp_dir) / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "sample-app",
+                        "dependencies": {"left-pad": "^1.3.0"},
+                        "devDependencies": {"@babel/core": "^8.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            runner = CliRunner()
+            result = runner.invoke(cli, ["uninstall", "--lockfile", str(lockfile)])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        uninstall_command = mock_run_cli.call_args.args[0]
+        self.assertEqual(uninstall_command[0].lower().endswith(("npm", "npm.cmd")), True)
+        self.assertEqual(uninstall_command[1], "uninstall")
+        self.assertEqual(set(uninstall_command[2:]), {"left-pad", "@babel/core"})
+
+    @patch("depshieldx.cli.commands.uninstall._run_cli_command")
+    def test_uninstall_npm_bare_package_names_with_ecosystem_flag(self, mock_run_cli):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["uninstall", "left-pad", "@babel/core", "--ecosystem", "npm"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        uninstall_command = mock_run_cli.call_args.args[0]
+        self.assertEqual(uninstall_command[1:], ["uninstall", "left-pad", "@babel/core"])
 
 
 if __name__ == "__main__":

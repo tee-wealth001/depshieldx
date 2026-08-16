@@ -209,6 +209,70 @@ class NpmHostInstallCommandTests(unittest.TestCase):
             self.assertEqual(command, ["/usr/local/bin/npm", "install"])
 
 
+class NpmDirectDependencyNamesForLockfileTests(unittest.TestCase):
+    """direct_dependency_names_for_lockfile backs `depshieldx uninstall
+    --lockfile <npm-lockfile>` -- see findings.md-style reasoning in
+    ecosystems/npm.py's docstring for why this reads package.json instead
+    of trying to infer directness from the lockfile itself."""
+
+    def test_reads_dependencies_and_dev_dependencies(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lockfile = Path(temp_dir) / "package-lock.json"
+            lockfile.write_text("{}", encoding="utf-8")
+            (Path(temp_dir) / "package.json").write_text(
+                json.dumps(
+                    {
+                        "name": "demo",
+                        "dependencies": {"left-pad": "^1.3.0", "@babel/core": "^8.0.0"},
+                        "devDependencies": {"eslint": "^9.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            names = NPM_ECOSYSTEM.direct_dependency_names_for_lockfile(str(lockfile))
+
+        self.assertEqual(set(names), {"left-pad", "@babel/core", "eslint"})
+
+    def test_excludes_transitive_only_packages(self):
+        # A transitive dependency (e.g. left-pad pulled in by another
+        # package) that ISN'T in package.json's own dependency lists must
+        # not show up -- only what the user directly asked for.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lockfile = Path(temp_dir) / "package-lock.json"
+            lockfile.write_text(
+                json.dumps(
+                    {
+                        "packages": {
+                            "": {"dependencies": {"is-odd": "^3.0.0"}},
+                            "node_modules/is-odd": {"version": "3.0.1"},
+                            "node_modules/left-pad": {"version": "1.3.0"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (Path(temp_dir) / "package.json").write_text(
+                json.dumps({"name": "demo", "dependencies": {"is-odd": "^3.0.0"}}),
+                encoding="utf-8",
+            )
+
+            names = NPM_ECOSYSTEM.direct_dependency_names_for_lockfile(str(lockfile))
+
+        self.assertEqual(names, ["is-odd"])
+        self.assertNotIn("left-pad", names)
+
+    def test_missing_package_json_raises_clear_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lockfile = Path(temp_dir) / "package-lock.json"
+            lockfile.write_text("{}", encoding="utf-8")
+
+            with self.assertRaises(RuntimeError) as ctx:
+                NPM_ECOSYSTEM.direct_dependency_names_for_lockfile(str(lockfile))
+
+        self.assertIn("no package.json found", str(ctx.exception))
+
+
 class NpmToolResolutionTests(unittest.TestCase):
     """Regression coverage for a real bug: subprocess.run(["npm", ...]) fails on
     Windows with WinError 2 even when npm is genuinely installed, because npm

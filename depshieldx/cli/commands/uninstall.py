@@ -1,30 +1,32 @@
 import click
 
-from ...ecosystems import PYPI_ECOSYSTEM
 from ..engine import _ecosystem_for_input_source, _load_cli_input, _run_cli_command, _uninstall_args_for_input_source
 from ..output import _echo_success, _stage_loader
 
 
 @click.argument("targets", nargs=-1)
 @click.option("-r", "--requirement", "requirement_file", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Uninstall packages from a requirements file")
-@click.option("--lockfile", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Uninstall packages listed in a lockfile such as uv.lock")
+@click.option("--lockfile", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Uninstall packages listed in a lockfile such as uv.lock or package-lock.json")
 @click.option("--pyproject", "pyproject_file", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str), help="Uninstall dependencies listed in a pyproject.toml file")
-@click.option("--verbose", is_flag=True, help="Show underlying pip uninstall command output")
-def uninstall(targets, requirement_file, lockfile, pyproject_file, verbose):
-    """Uninstall one or more Python packages."""
+@click.option(
+    "--ecosystem",
+    "ecosystem_option",
+    type=click.Choice(["pypi", "npm"], case_sensitive=False),
+    default=None,
+    help="Ecosystem for bare package-name targets (ignored for --lockfile, which is auto-detected by filename). Defaults to pypi.",
+)
+@click.option("--verbose", is_flag=True, help="Show underlying pip/npm uninstall command output")
+def uninstall(targets, requirement_file, lockfile, pyproject_file, ecosystem_option, verbose):
+    """Uninstall one or more packages."""
     input_source = _load_cli_input(
         targets,
         requirement_file=requirement_file,
         lockfile=lockfile,
         pyproject_file=pyproject_file,
+        ecosystem=ecosystem_option,
     )
     ecosystem = _ecosystem_for_input_source(input_source)
-    if ecosystem is not PYPI_ECOSYSTEM:
-        raise click.UsageError(
-            f"uninstall is not supported yet for the {ecosystem.name} ecosystem "
-            f"(npm's lockfile-implied uninstall semantics need their own design pass)"
-        )
-    uninstall_args = _uninstall_args_for_input_source(input_source)
+    uninstall_args = _uninstall_args_for_input_source(input_source, ecosystem)
     if not uninstall_args:
         raise click.UsageError("Could not determine which packages to uninstall")
 

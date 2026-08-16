@@ -11,6 +11,7 @@ import click
 import requests
 
 from ..ecosystems import PYPI_ECOSYSTEM, ecosystem_for_name
+from ..ecosystems.base import _normalize_name_for_ecosystem, _strip_version_spec
 from ..input_sources import load_input_source
 from ..routing import (
     dismiss_routing_prompt,
@@ -128,17 +129,34 @@ def _resolve_input_source(input_source, ecosystem):
     )
 
 
-def _uninstall_args_for_input_source(input_source):
+def _uninstall_args_for_input_source(input_source, ecosystem):
     if input_source.source_type == "requirements":
         return input_source.pip_args[:]
+
+    if input_source.source_type == "lockfile" and ecosystem.name == "npm":
+        # npm/yarn/pnpm lockfiles pass their raw path through as the sole
+        # requested target (NpmEcosystem.resolve() parses it directly) --
+        # unlike uv.lock, which is pre-parsed into name==version strings by
+        # input_sources.py, so this branch is npm-specific, not a general
+        # "lockfile" case.
+        return ecosystem.direct_dependency_names_for_lockfile(input_source.requested_targets[0])
 
     package_names = []
     seen = set()
     for target in input_source.requested_targets:
-        package_name = _package_name_from_requirement(target) or target.strip()
+        if ecosystem.name == "npm":
+            # _package_name_from_requirement is PyPI-shaped (name==version,
+            # name[extra]) and actively rejects anything containing "/",
+            # which would break scoped packages like "@babel/core" -- npm's
+            # own "name@version" / "@scope/name@version" stripping already
+            # exists in ecosystems/base.py and handles the scoped-name edge
+            # case correctly.
+            package_name = _strip_version_spec(target, "npm").strip()
+        else:
+            package_name = _package_name_from_requirement(target) or target.strip()
         if not package_name:
             continue
-        normalized = package_name.lower().replace("-", "_")
+        normalized = _normalize_name_for_ecosystem(package_name, ecosystem.name)
         if normalized in seen:
             continue
         seen.add(normalized)
