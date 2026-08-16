@@ -843,9 +843,9 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_OK)
         self.assertIn("Trivy verdict: passed (0 finding(s))", result.output)
         install_command = mock_run_cli.call_args.args[0]
-        self.assertEqual(install_command[:3], ["pip", "install", "--no-deps"])
+        self.assertEqual(install_command[:5], [sys.executable, "-m", "pip", "install", "--no-deps"])
         self.assertEqual(
-            [Path(value).name for value in install_command[3:]],
+            [Path(value).name for value in install_command[5:]],
             ["Flask-3.1.3-py3-none-any.whl", "Werkzeug-3.1.7-py3-none-any.whl"],
         )
         self.assertEqual(mock_run_cli.call_args.kwargs, {"verbose": False})
@@ -1273,7 +1273,9 @@ class FormatSummaryTests(unittest.TestCase):
         result = runner.invoke(cli, ["uninstall", "langchain", "requests"])
 
         self.assertEqual(result.exit_code, EXIT_OK)
-        mock_run_cli.assert_called_once_with(["pip", "uninstall", "-y", "langchain", "requests"], verbose=False)
+        mock_run_cli.assert_called_once_with(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "langchain", "requests"], verbose=False
+        )
         self.assertIn("Uninstall completed.", result.output)
 
     @patch("depshieldx.cli._run_cli_command")
@@ -1295,5 +1297,7 @@ class FormatSummaryTests(unittest.TestCase):
             result = runner.invoke(cli, ["uninstall", "-r", "requirements.txt"])
 
         self.assertEqual(result.exit_code, EXIT_OK)
-        mock_run_cli.assert_called_once_with(["pip", "uninstall", "-y", "-r", "requirements.txt"], verbose=False)
+        mock_run_cli.assert_called_once_with(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "-r", "requirements.txt"], verbose=False
+        )
         self.assertIn("Removed packages listed in requirements.txt.", result.output)

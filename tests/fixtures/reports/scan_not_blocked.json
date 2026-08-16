@@ -1,0 +1,96 @@
+{
+  "ecosystem": "pypi",
+  "environment": {
+    "block": false,
+    "pip": {
+      "error": null,
+      "ok": true,
+      "required": "pip>=25.3",
+      "version": "26.0.1"
+    },
+    "python": {
+      "ok": true,
+      "required": "Python>=3.11.4",
+      "version": "3.14.4"
+    },
+    "reason": null
+  },
+  "install": {
+    "attempted": false,
+    "reason": "scan_only",
+    "skipped": true,
+    "success": false
+  },
+  "mode": "fast",
+  "operation": "scan",
+  "package": "fixturepkg-1.0.0-py3-none-any.whl",
+  "provenance": {
+    "block": false,
+    "details": [
+      {
+        "block": false,
+        "infos": ["resolved release metadata is missing on PyPI"],
+        "package": "fixturepkg",
+        "signals": {"unavailable": true},
+        "version": "1.0.0",
+        "warnings": []
+      }
+    ],
+    "infos": ["fixturepkg==1.0.0: resolved release metadata is missing on PyPI"],
+    "warnings": []
+  },
+  "receipt": {
+    "decision": "skipped",
+    "path": "/home/user/.depshieldx-cache/receipts/20260816T010128Z-fixturepkg-1.0.0-1217c5d2a1d821e2.json",
+    "receipt_id": "1217c5d2a1d821e2",
+    "signature": "d7cf2ee50500baf6e91071a93d53f9ecdd35221928be78b86eaa4e7ebf305ce2"
+  },
+  "requested_at": "2026-08-16T01:01:26.643287+00:00",
+  "resolution": {
+    "install_target": "fixturepkg==1.0.0",
+    "package_records": [
+      {
+        "digest": "edfdb72bca019575e7e991244de166018d71c3ad988d8553fcfb036ae817bd01",
+        "direct": false,
+        "ecosystem": "pypi",
+        "name": "fixturepkg",
+        "purl": "pkg:pypi/fixturepkg@1.0.0",
+        "source": "pypi.org",
+        "version": "1.0.0"
+      }
+    ],
+    "packages": ["fixturepkg"],
+    "requested_targets": ["fixturepkg-1.0.0-py3-none-any.whl"],
+    "resolution_error": null,
+    "resolution_succeeded": true,
+    "resolved_versions": {"fixturepkg": "1.0.0"},
+    "selected_artifacts": {
+      "fixturepkg": [
+        {
+          "digests": {"sha256": "edfdb72bca019575e7e991244de166018d71c3ad988d8553fcfb036ae817bd01"},
+          "filename": "fixturepkg-1.0.0-py3-none-any.whl",
+          "packagetype": "bdist_wheel",
+          "url": "file:///home/user/fixturepkg-1.0.0-py3-none-any.whl"
+        }
+      ]
+    },
+    "source_type": "package"
+  },
+  "sandbox": null,
+  "scan": {
+    "block": false,
+    "infos": ["deps.dev lookup unavailable: fixturepkg==1.0.0: 404 Client Error: Not Found"],
+    "threat_intelligence": {
+      "cisa_kev": {"hits": [], "source": "cisa-kev", "unverified_hits": [], "warnings": []},
+      "deps_dev": {"hits": [], "source": "deps_dev", "warnings": ["deps.dev lookup unavailable"]},
+      "github_advisories": {"hits": [], "source": "github_advisories", "warnings": []},
+      "hits": [],
+      "multi_source_cves": {"fixturepkg": {"current": [], "historical": [], "unverified": []}},
+      "osv": {"hits": [], "source": "osv", "warnings": []},
+      "sources": [],
+      "trivy": null
+    },
+    "warnings": []
+  },
+  "schema_version": "1"
+}

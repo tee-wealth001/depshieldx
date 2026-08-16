@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tee-wealth001/depshieldx/schema/report.schema.json",
+  "title": "depshieldx report",
+  "description": "Top-level shape of the report depshieldx install/scan write to stdout with --output json. Validates the stable contract only (top-level keys and their types) -- nested provenance/scan/sandbox internals are intentionally not exhaustively validated here, since those are expected to evolve as CVE sources and sandboxing change. Unknown top-level fields are allowed so the contract can grow without breaking consumers.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ecosystem",
+    "package",
+    "requested_at",
+    "mode",
+    "operation",
+    "environment",
+    "resolution"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Bumped whenever a breaking change is made to this report shape."
+    },
+    "ecosystem": {
+      "type": "string",
+      "description": "Which package-manager ecosystem this report is for, e.g. \"pypi\"."
+    },
+    "package": {
+      "type": "string"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["fast", "deep"]
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["install", "scan"]
+    },
+    "environment": {
+      "type": "object"
+    },
+    "resolution": {
+      "type": "object"
+    },
+    "provenance": {
+      "type": ["object", "null"]
+    },
+    "scan": {
+      "type": ["object", "null"]
+    },
+    "sandbox": {
+      "type": ["object", "null"]
+    },
+    "install": {
+      "type": ["object", "null"]
+    },
+    "receipt": {
+      "type": "object",
+      "description": "Present once _prepare_report_with_receipt has run (always true for the final report printed to the user).",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allowed", "blocked", "skipped", "failed", "unavailable"]
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

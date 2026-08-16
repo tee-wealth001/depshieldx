@@ -24,6 +24,7 @@ import requests
 
 from .provenance import check_provenance_batch
 from .resolver import ResolutionResult, resolve_dependencies, resolve_install_inputs
+from .runtime import pip_command
 
 
 @dataclass
@@ -197,10 +198,10 @@ class PyPiEcosystem:
             yield self.install_command(artifact_paths)
 
     def install_command(self, artifact_paths: list[str]) -> list[str]:
-        return ["pip", "install", "--no-deps", *artifact_paths]
+        return pip_command(["install", "--no-deps", *artifact_paths])
 
     def uninstall_command(self, package_names: list[str]) -> list[str]:
-        return ["pip", "uninstall", "-y", *package_names]
+        return pip_command(["uninstall", "-y", *package_names])
 
 
 PYPI_ECOSYSTEM = PyPiEcosystem()

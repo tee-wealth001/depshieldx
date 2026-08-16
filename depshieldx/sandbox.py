@@ -1,6 +1,5 @@
 import shutil
 import subprocess
-import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -14,9 +13,9 @@ from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel
 
 from .artifact_analysis import analyze_artifacts
 from .cache import fingerprint_artifacts, load_cache_entry, store_cache_entry
+from .runtime import pip_command, resource_path, system_python_executable
 from .trivy import scan_filesystem
 
-PACKAGE_ROOT = Path(__file__).resolve().parent
 DOCKER_IMAGE = "python:3.11"
 SANDBOX_USER = "65534:65534"
 
@@ -189,9 +188,9 @@ def _docker_daemon_available() -> tuple[bool, Optional[str]]:
 
 def _run_local_sandbox(bundle: DownloadBundle, install_targets: list[str], verbose: bool) -> subprocess.CompletedProcess:
     command = [
-        sys.executable,
+        system_python_executable(),
         "-I",
-        str(PACKAGE_ROOT / "sandbox_wrapper.py"),
+        str(resource_path("sandbox_wrapper.py")),
         bundle.temp_dir,
         *install_targets,
     ]
@@ -230,15 +229,7 @@ def download_packages_local(install_targets: list[str], temp_dir: str, verbose: 
     Used when Docker is unavailable and the sandbox falls back to a local guarded subprocess.
     """
     _run_command(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "download",
-            "--dest",
-            temp_dir,
-            *install_targets,
-        ],
+        pip_command(["download", "--dest", temp_dir, *install_targets]),
         verbose=verbose,
     )
 
@@ -383,7 +374,7 @@ def run_sandbox(
                 )
             isolation = {
                 "backend": "local_subprocess",
-                "python": sys.executable,
+                "python": system_python_executable(),
                 "mode": "offline_guarded_subprocess",
                 "network": "guarded_by_wrapper",
                 "filesystem": "host_process_with_write_guards",
@@ -474,7 +465,7 @@ def run_sandbox(
                 "-v",
                 f"{bundle.temp_dir}:/tmp/packages:ro",
                 "-v",
-                f"{PACKAGE_ROOT}:/depshieldx:ro",
+                f"{resource_path('sandbox_wrapper.py').parent}:/depshieldx:ro",
                 DOCKER_IMAGE,
                 "python",
                 "/depshieldx/sandbox_wrapper.py",

@@ -19,6 +19,7 @@ import requests
 from .ecosystems import PYPI_ECOSYSTEM, package_records
 from .input_sources import load_input_source
 from .receipts import ReceiptUnavailableError, delete_receipts, list_receipts, verify_receipt, write_receipt
+from .runtime import pip_command, self_invoke_command
 from .routing import (
     dismiss_routing_prompt,
     disable_routing as disable_routing_shim,
@@ -1583,7 +1584,7 @@ def route_pip(pip_args):
     package_target = _extract_simple_install_target(args)
     if package_target:
         click.echo("Routing pip install through depshieldx...")
-        command = [sys.executable, "-m", "depshieldx.cli", "install", package_target]
+        command = self_invoke_command(["install", package_target])
         if os.environ.get("DEPSHIELDX_ROUTE_DEEP") == "1":
             command.append("--deep")
         result = subprocess.run(command, check=False)
@@ -1594,7 +1595,7 @@ def route_pip(pip_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([sys.executable, "-m", "pip", *args], check=False)
+    result = subprocess.run(pip_command(args), check=False)
     raise SystemExit(result.returncode)
 
 

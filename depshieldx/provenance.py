@@ -43,8 +43,13 @@ def _selected_artifact_cache_token(selected_files: list[dict] | None) -> str:
 
 
 def _cache_key(package_name: str, version: str | None, selected_files: list[dict] | None = None) -> str:
+    # "pypi" is hardcoded, not threaded through as a parameter, because this whole module is
+    # PyPI-specific today (hardcoded PyPI URLs throughout). It's here so a future ecosystem's
+    # own cache entries can never collide with these, even if that ecosystem's adapter ends up
+    # sharing this cache directory rather than using its own -- see final-plan.md Phase 0
+    # definition of done, item 7.
     payload = (
-        f"{_normalize_name(package_name)}=={version or ''}|"
+        f"pypi|{_normalize_name(package_name)}=={version or ''}|"
         f"{_attestation_verifier_cache_token()}|"
         f"{_selected_artifact_cache_token(selected_files)}"
     )

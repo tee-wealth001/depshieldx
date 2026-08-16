@@ -17,11 +17,12 @@
 import json
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass, field
 from typing import List
 from urllib.parse import urlparse
+
+from .runtime import pip_command
 
 
 @dataclass
@@ -182,18 +183,17 @@ def resolve_install_inputs(
         with tempfile.NamedTemporaryFile(prefix="depshieldx_report_", suffix=".json", delete=False) as report_file:
             report_path = Path(report_file.name)
         subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--quiet",
-                "--dry-run",
-                "--ignore-installed",
-                "--report",
-                str(report_path),
-                *pip_args,
-            ],
+            pip_command(
+                [
+                    "install",
+                    "--quiet",
+                    "--dry-run",
+                    "--ignore-installed",
+                    "--report",
+                    str(report_path),
+                    *pip_args,
+                ]
+            ),
             check=True,
             capture_output=True,
             text=True,
