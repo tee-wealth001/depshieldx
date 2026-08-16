@@ -13,14 +13,33 @@ import requests
 DEFAULT_FEED_ENV = "DEPSHIELDX_THREAT_FEEDS"
 GITHUB_ADVISORIES_URL = "https://api.github.com/advisories"
 CISA_KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-DEPS_DEV_VERSION_URLS = (
-    "https://api.deps.dev/v3/systems/pypi/packages/{package}/versions/{version}",
-    "https://api.deps.dev/v3alpha/systems/pypi/packages/{package}/versions/{version}",
+DEPS_DEV_VERSION_URL_TEMPLATES = (
+    "https://api.deps.dev/v3/systems/{system}/packages/{package}/versions/{version}",
+    "https://api.deps.dev/v3alpha/systems/{system}/packages/{package}/versions/{version}",
 )
 
+# depshieldx's internal ecosystem key -> each source's own naming convention. These don't
+# share one scheme (GHSA uses "pip", deps.dev uses "pypi", OSV uses "PyPI" -- see
+# cve_sources.OSV_ECOSYSTEM_NAMES), so each source needs its own lookup.
+GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
+    "pypi": "pip",
+    "npm": "npm",
+}
+DEPS_DEV_SYSTEM_NAMES = {
+    "pypi": "pypi",
+    "npm": "npm",
+}
 
-def _normalize_name(name: str) -> str:
-    return name.strip().lower().replace("-", "_")
+
+def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
+    """PyPI treats "-"/"_" as equivalent (PEP 503) so those are folded together for
+    matching. Other ecosystems don't share that convention -- npm package names are
+    hyphen-significant ("left-pad" is not the same as "left_pad") -- so only PyPI gets
+    the substitution."""
+    normalized = name.strip().lower()
+    if ecosystem == "pypi":
+        return normalized.replace("-", "_")
+    return normalized
 
 
 def _is_version_affected(version: str | None, vulnerable_range: str | None) -> bool:
@@ -66,14 +85,15 @@ def _load_feed_document(location: str) -> tuple[dict | None, str | None]:
         return None, f"{location}: {exc}"
 
 
-def _deps_dev_version_payload(package: str, version: str) -> tuple[dict | None, str | None]:
+def _deps_dev_version_payload(package: str, version: str, ecosystem: str = "pypi") -> tuple[dict | None, str | None]:
     encoded_package = quote(package, safe="")
     encoded_version = quote(version, safe="")
+    system = DEPS_DEV_SYSTEM_NAMES.get(ecosystem, "pypi")
     last_error = None
-    for template in DEPS_DEV_VERSION_URLS:
+    for template in DEPS_DEV_VERSION_URL_TEMPLATES:
         try:
             response = requests.get(
-                template.format(package=encoded_package, version=encoded_version),
+                template.format(system=system, package=encoded_package, version=encoded_version),
                 timeout=5,  # Increased from 4
             )
             response.raise_for_status()
@@ -220,10 +240,12 @@ def check_threat_intelligence(packages: list[str], feed_locations: Iterable[str]
     }
 
 
-def fetch_github_advisories(packages: list[str], resolved_versions: dict[str, str] | None = None) -> dict:
-    normalized_packages = sorted({_normalize_name(package) for package in packages if package})
+def fetch_github_advisories(
+    packages: list[str], resolved_versions: dict[str, str] | None = None, ecosystem: str = "pypi"
+) -> dict:
+    normalized_packages = sorted({_normalize_name(package, ecosystem) for package in packages if package})
     resolved_versions = {
-        _normalize_name(name): version
+        _normalize_name(name, ecosystem): version
         for name, version in (resolved_versions or {}).items()
         if version
     }
@@ -234,7 +256,7 @@ def fetch_github_advisories(packages: list[str], resolved_versions: dict[str, st
         response = requests.get(
             GITHUB_ADVISORIES_URL,
             params={
-                "ecosystem": "pip",
+                "ecosystem": GITHUB_ADVISORY_ECOSYSTEM_NAMES.get(ecosystem, "pip"),
                 "affects": ",".join(normalized_packages),
                 "per_page": 100,
             },
@@ -257,7 +279,7 @@ def fetch_github_advisories(packages: list[str], resolved_versions: dict[str, st
     seen = set()
     for advisory in advisories:
         for vulnerability in advisory.get("vulnerabilities", []):
-            package = _normalize_name(vulnerability.get("package", {}).get("name", ""))
+            package = _normalize_name(vulnerability.get("package", {}).get("name", ""), ecosystem)
             if package not in normalized_packages:
                 continue
             resolved_version = resolved_versions.get(package)
@@ -326,9 +348,11 @@ def fetch_cisa_kev(cve_ids: Iterable[str]) -> dict:
     return {"hits": hits, "warnings": [], "source": "cisa_kev"}
 
 
-def fetch_deps_dev_insights(packages: list[str], resolved_versions: dict[str, str] | None = None) -> dict:
+def fetch_deps_dev_insights(
+    packages: list[str], resolved_versions: dict[str, str] | None = None, ecosystem: str = "pypi"
+) -> dict:
     normalized_versions = {
-        _normalize_name(name): version
+        _normalize_name(name, ecosystem): version
         for name, version in (resolved_versions or {}).items()
         if version
     }
@@ -336,12 +360,12 @@ def fetch_deps_dev_insights(packages: list[str], resolved_versions: dict[str, st
     warnings = []
 
     for package in packages:
-        normalized_name = _normalize_name(package)
+        normalized_name = _normalize_name(package, ecosystem)
         version = normalized_versions.get(normalized_name)
         if not version:
             continue
 
-        payload, error = _deps_dev_version_payload(normalized_name, version)
+        payload, error = _deps_dev_version_payload(normalized_name, version, ecosystem)
         if error or not payload:
             warnings.append(f"deps.dev lookup unavailable: {package}=={version}: {error}")
             continue

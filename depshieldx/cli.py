@@ -1030,6 +1030,7 @@ def _run_fast_checks(resolution, verbose=False):
             _scan_failure,
             resolution.packages,
             resolved_versions=resolution.resolved_versions,
+            ecosystem=PYPI_ECOSYSTEM.name,
         )
         return provenance_future.result(), scan_future.result()
 

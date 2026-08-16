@@ -7,8 +7,11 @@ INFO_ONLY_WARNING_PREFIXES = (
 )
 
 
-def _normalize_name(name):
-    return name.strip().lower().replace("-", "_")
+def _normalize_name(name, ecosystem="pypi"):
+    normalized = name.strip().lower()
+    if ecosystem == "pypi":
+        return normalized.replace("-", "_")
+    return normalized
 
 
 def _split_messages_by_severity(messages):
@@ -22,9 +25,9 @@ def _split_messages_by_severity(messages):
     return warnings, infos
 
 
-def _expand_resolved_versions(packages, resolved_versions=None):
+def _expand_resolved_versions(packages, resolved_versions=None, ecosystem="pypi"):
     normalized = {
-        _normalize_name(name): version
+        _normalize_name(name, ecosystem): version
         for name, version in (resolved_versions or {}).items()
         if version
     }
@@ -33,20 +36,20 @@ def _expand_resolved_versions(packages, resolved_versions=None):
         if version:
             expanded[name] = version
     for package in packages:
-        version = normalized.get(_normalize_name(package))
+        version = normalized.get(_normalize_name(package, ecosystem))
         if version:
             expanded[package] = version
-            expanded[_normalize_name(package)] = version
+            expanded[_normalize_name(package, ecosystem)] = version
     return expanded
 
 
-def scan_vulnerabilities(packages, resolved_versions=None):
+def scan_vulnerabilities(packages, resolved_versions=None, ecosystem="pypi"):
     """
     Check resolved packages against the four vulnerability sources only:
     OSV, CISA KEV, GitHub Advisories, and deps.dev.
     """
-    resolved_lookup = _expand_resolved_versions(packages, resolved_versions)
-    all_sources = fetch_all_sources_for_packages(packages, resolved_lookup)
+    resolved_lookup = _expand_resolved_versions(packages, resolved_versions, ecosystem)
+    all_sources = fetch_all_sources_for_packages(packages, resolved_lookup, ecosystem=ecosystem)
 
     osv_results = all_sources.get("osv_results", {})
     cisa_kev_results = all_sources.get("cisa_kev_results", {})
@@ -63,7 +66,7 @@ def scan_vulnerabilities(packages, resolved_versions=None):
     cisa_kev_hits = []
     cisa_kev_unverified_hits = []
     package_versions = {
-        package: resolved_lookup.get(package) or resolved_lookup.get(_normalize_name(package)) or ""
+        package: resolved_lookup.get(package) or resolved_lookup.get(_normalize_name(package, ecosystem)) or ""
         for package in packages
     }
 
@@ -147,7 +150,7 @@ def scan_vulnerabilities(packages, resolved_versions=None):
         version = (
             package_versions.get(package_name)
             or resolved_lookup.get(package_name)
-            or resolved_lookup.get(_normalize_name(package_name))
+            or resolved_lookup.get(_normalize_name(package_name, ecosystem))
         )
         package_label = f"{package_name}=={version}" if version else package_name
         advisory_id = first_hit.get("ghsa_id") or first_hit.get("cve_id") or "unknown advisory"
