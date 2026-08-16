@@ -833,7 +833,7 @@ class FormatSummaryTests(unittest.TestCase):
         mock_requests_get.side_effect = [flask_resp, werkzeug_resp]
 
         runner = CliRunner()
-        with patch("depshieldx.ecosystems.hashlib.sha256") as mock_sha256:
+        with patch("depshieldx.ecosystems.pypi.hashlib.sha256") as mock_sha256:
             mock_sha256.side_effect = [
                 Mock(hexdigest=Mock(return_value="sha-flask")),
                 Mock(hexdigest=Mock(return_value="sha-werkzeug")),

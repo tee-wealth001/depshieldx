@@ -170,7 +170,7 @@ class NpmHostInstallCommandTests(unittest.TestCase):
             source_type=source_type,
         )
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value="/usr/local/bin/npm")
     @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
     @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
     def test_ad_hoc_single_package_install_is_pinned(self, _mock_entries, _mock_fetch, _mock_which):
@@ -179,7 +179,7 @@ class NpmHostInstallCommandTests(unittest.TestCase):
         with NPM_ECOSYSTEM.host_install_command(resolution) as command:
             self.assertEqual(command, ["/usr/local/bin/npm", "install", "left-pad@1.3.0"])
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value="/usr/local/bin/npm")
     @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
     @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
     def test_ad_hoc_multi_package_install_is_pinned(self, _mock_entries, _mock_fetch, _mock_which):
@@ -190,7 +190,7 @@ class NpmHostInstallCommandTests(unittest.TestCase):
         with NPM_ECOSYSTEM.host_install_command(resolution) as command:
             self.assertEqual(command, ["/usr/local/bin/npm", "install", "left-pad@1.3.0", "is-odd@3.0.1"])
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value="/usr/local/bin/npm")
     @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
     @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
     def test_ad_hoc_scoped_package_install_is_pinned(self, _mock_entries, _mock_fetch, _mock_which):
@@ -199,7 +199,7 @@ class NpmHostInstallCommandTests(unittest.TestCase):
         with NPM_ECOSYSTEM.host_install_command(resolution) as command:
             self.assertEqual(command, ["/usr/local/bin/npm", "install", "@babel/core@8.0.1"])
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value="/usr/local/bin/npm")
     @patch.object(NPM_ECOSYSTEM, "fetch_artifact")
     @patch.object(NPM_ECOSYSTEM, "selected_artifact_entries", return_value=[])
     def test_lockfile_install_stays_bare(self, _mock_entries, _mock_fetch, _mock_which):
@@ -215,7 +215,7 @@ class NpmToolResolutionTests(unittest.TestCase):
     ships as npm.cmd and Python's subprocess (unlike a shell) won't find a .cmd
     shim from a bare "npm" argument."""
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value=r"C:\Program Files\nodejs\npm.cmd")
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value=r"C:\Program Files\nodejs\npm.cmd")
     def test_install_command_uses_resolved_path_not_bare_name(self, mock_which):
         command = NPM_ECOSYSTEM.install_command([])
 
@@ -223,13 +223,13 @@ class NpmToolResolutionTests(unittest.TestCase):
         self.assertEqual(command[0], r"C:\Program Files\nodejs\npm.cmd")
         self.assertNotEqual(command[0], "npm")
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value="/usr/local/bin/npm")
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value="/usr/local/bin/npm")
     def test_uninstall_command_uses_resolved_path(self, _mock_which):
         command = NPM_ECOSYSTEM.uninstall_command(["left-pad"])
 
         self.assertEqual(command, ["/usr/local/bin/npm", "uninstall", "left-pad"])
 
-    @patch("depshieldx.ecosystems.shutil.which", return_value=None)
+    @patch("depshieldx.ecosystems.npm.shutil.which", return_value=None)
     def test_raises_clear_error_when_npm_not_on_path(self, _mock_which):
         with self.assertRaises(RuntimeError):
             NPM_ECOSYSTEM.install_command([])
