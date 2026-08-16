@@ -1,4 +1,4 @@
-from .cve_sources import fetch_all_sources_for_packages
+from .intelligence import fetch_all_sources_for_packages
 
 INFO_ONLY_WARNING_PREFIXES = (
     "github advisory lookup unavailable",

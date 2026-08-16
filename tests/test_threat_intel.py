@@ -4,13 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from depshieldx.threat_intel import (
-    _normalize_name,
-    check_threat_intelligence,
-    fetch_cisa_kev,
-    fetch_deps_dev_insights,
-    fetch_github_advisories,
-)
+from depshieldx.intelligence.cisa_kev import fetch_cisa_kev
+from depshieldx.intelligence.common import _normalize_name
+from depshieldx.intelligence.deps_dev import fetch_deps_dev_insights
+from depshieldx.intelligence.github_advisories import fetch_github_advisories
+from depshieldx.intelligence.local_feed import check_threat_intelligence
 
 
 class ThreatIntelTests(unittest.TestCase):
@@ -62,7 +60,7 @@ class ThreatIntelTests(unittest.TestCase):
             ["temp_loader threat-intelligence warning: matches suspicious temporary-package naming pattern"],
         )
 
-    @patch("depshieldx.threat_intel.requests.get", side_effect=RuntimeError("network down"))
+    @patch("depshieldx.intelligence.local_feed.requests.get", side_effect=RuntimeError("network down"))
     def test_unavailable_feed_warns_without_blocking(self, _mock_get):
         result = check_threat_intelligence(["flask"], ["https://feeds.example.test/malware.json"])
 
@@ -71,7 +69,7 @@ class ThreatIntelTests(unittest.TestCase):
         self.assertEqual(len(result["warnings"]), 1)
         self.assertIn("threat intelligence feed unavailable", result["warnings"][0])
 
-    @patch("depshieldx.threat_intel.requests.get")
+    @patch("depshieldx.intelligence.github_advisories.requests.get")
     def test_fetch_github_advisories_returns_hits_for_affected_version(self, mock_get):
         mock_response = SimpleNamespace(
             json=lambda: [
@@ -100,7 +98,7 @@ class ThreatIntelTests(unittest.TestCase):
         self.assertEqual(result["hits"][0]["severity"], "HIGH")
         self.assertEqual(result["hits"][0]["ghsa_id"], "GHSA-1234")
 
-    @patch("depshieldx.threat_intel.requests.get")
+    @patch("depshieldx.intelligence.github_advisories.requests.get")
     def test_fetch_github_advisories_skips_unaffected_version(self, mock_get):
         mock_response = SimpleNamespace(
             json=lambda: [
@@ -127,7 +125,7 @@ class ThreatIntelTests(unittest.TestCase):
 
         self.assertEqual(result["hits"], [])
 
-    @patch("depshieldx.threat_intel.requests.get")
+    @patch("depshieldx.intelligence.cisa_kev.requests.get")
     def test_fetch_cisa_kev_filters_requested_cves(self, mock_get):
         mock_response = SimpleNamespace(
             json=lambda: {
@@ -151,7 +149,7 @@ class ThreatIntelTests(unittest.TestCase):
         self.assertEqual(len(result["hits"]), 1)
         self.assertEqual(result["hits"][0]["cve_id"], "CVE-2024-1234")
 
-    @patch("depshieldx.threat_intel.requests.get")
+    @patch("depshieldx.intelligence.deps_dev.requests.get")
     def test_fetch_deps_dev_insights_returns_version_metadata(self, mock_get):
         mock_response = SimpleNamespace(
             json=lambda: {
@@ -176,7 +174,7 @@ class ThreatIntelTests(unittest.TestCase):
         self.assertEqual(result["hits"][0]["advisory_count"], 1)
         self.assertEqual(result["hits"][0]["advisories"][0]["id"], "GHSA-1234")
 
-    @patch("depshieldx.threat_intel.requests.get", side_effect=RuntimeError("network down"))
+    @patch("depshieldx.intelligence.deps_dev.requests.get", side_effect=RuntimeError("network down"))
     def test_fetch_deps_dev_insights_warns_when_lookup_unavailable(self, _mock_get):
         result = fetch_deps_dev_insights(["flask"], resolved_versions={"Flask": "3.1.3"})
 
@@ -193,7 +191,7 @@ class ThreatIntelTests(unittest.TestCase):
         # Folding these together (the PyPI default) would silently break every npm lookup.
         self.assertEqual(_normalize_name("left-pad", ecosystem="npm"), "left-pad")
 
-    @patch("depshieldx.threat_intel.requests.get")
+    @patch("depshieldx.intelligence.github_advisories.requests.get")
     def test_fetch_github_advisories_uses_npm_ecosystem_and_preserves_hyphens(self, mock_get):
         mock_response = SimpleNamespace(
             json=lambda: [
@@ -222,7 +220,7 @@ class ThreatIntelTests(unittest.TestCase):
         self.assertEqual(result["hits"][0]["package"], "left-pad")
         self.assertEqual(result["hits"][0]["ghsa_id"], "GHSA-npm-demo")
 
-    @patch("depshieldx.threat_intel.requests.get")
+    @patch("depshieldx.intelligence.deps_dev.requests.get")
     def test_fetch_deps_dev_insights_uses_npm_system_in_url(self, mock_get):
         mock_response = SimpleNamespace(
             json=lambda: {"dependencies": [], "advisories": []},

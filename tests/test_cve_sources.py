@@ -1,6 +1,6 @@
 import unittest
 
-from depshieldx.cve_sources import OSV_ECOSYSTEM_NAMES
+from depshieldx.intelligence.osv import OSV_ECOSYSTEM_NAMES
 
 
 class OsvEcosystemNamesTests(unittest.TestCase):
