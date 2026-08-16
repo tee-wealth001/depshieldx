@@ -7,20 +7,22 @@ import sys
 
 from click.testing import CliRunner
 
-from depshieldx.cli import (
+from depshieldx.cli import cli
+from depshieldx.cli.engine import (
+    _finalize_routing_after_install,
+    _handle_routing_choice,
+    _run_cli_command,
+    _run_fast_checks,
+)
+from depshieldx.cli.output import (
     EXIT_BLOCKED,
     EXIT_OK,
     _determine_exit_code,
-    _finalize_routing_after_install,
     _format_summary,
-    _handle_routing_choice,
     _render_report,
-    _runtime_environment_report,
-    _run_cli_command,
-    _run_fast_checks,
     _summary_line_color,
-    cli,
 )
+from depshieldx.cli.prerequisites import _runtime_environment_report
 from depshieldx.receipts import ReceiptUnavailableError
 from depshieldx.resolver import ResolutionResult
 from depshieldx.routing import should_prompt_for_routing
@@ -29,16 +31,16 @@ from depshieldx.sandbox import SandboxResult
 
 class FormatSummaryTests(unittest.TestCase):
     def test_runtime_environment_report_blocks_old_pip(self):
-        with patch("depshieldx.cli.sys.version_info", (3, 11, 4, "final", 0)):
-            with patch("depshieldx.cli.metadata.version", return_value="25.2"):
+        with patch("depshieldx.cli.prerequisites.sys.version_info", (3, 11, 4, "final", 0)):
+            with patch("depshieldx.cli.prerequisites.metadata.version", return_value="25.2"):
                 report = _runtime_environment_report()
 
         self.assertTrue(report["block"])
         self.assertIn("requires pip>=25.3", report["reason"])
 
     def test_runtime_environment_report_accepts_secure_python_and_pip(self):
-        with patch("depshieldx.cli.sys.version_info", (3, 11, 4, "final", 0)):
-            with patch("depshieldx.cli.metadata.version", return_value="25.3"):
+        with patch("depshieldx.cli.prerequisites.sys.version_info", (3, 11, 4, "final", 0)):
+            with patch("depshieldx.cli.prerequisites.metadata.version", return_value="25.3"):
                 report = _runtime_environment_report()
 
         self.assertFalse(report["block"])
@@ -493,7 +495,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertTrue(rendered.startswith("Report\n{"))
         self.assertNotIn("Summary", rendered)
 
-    @patch("depshieldx.cli.write_receipt", side_effect=ReceiptUnavailableError("receipt store unavailable"))
+    @patch("depshieldx.cli.report.write_receipt", side_effect=ReceiptUnavailableError("receipt store unavailable"))
     def test_render_report_summary_handles_receipt_unavailable(self, _mock_write_receipt):
         report = {
             "package": "flask",
@@ -512,7 +514,7 @@ class FormatSummaryTests(unittest.TestCase):
 
         self.assertEqual(exit_code, EXIT_BLOCKED)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_returns_blocked_exit_code(
         self,
@@ -537,7 +539,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Host install: blocked", result.output)
         self.assertNotIn("Report\n{", result.output)
 
-    @patch("depshieldx.cli.scan_vulnerabilities")
+    @patch("depshieldx.cli.engine.scan_vulnerabilities")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.check_provenance", side_effect=SystemExit(0))
     def test_run_fast_checks_converts_system_exit_into_blocked_provenance_result(
         self,
@@ -562,7 +564,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("provenance check failed unexpectedly", provenance_result["reason"])
         self.assertFalse(scan_result["block"])
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_blocks_on_resolution_failure(
         self,
@@ -589,7 +591,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertNotIn("Scan verdict:", result.output)
         mock_fast_checks.assert_not_called()
 
-    @patch("depshieldx.cli._runtime_environment_report")
+    @patch("depshieldx.cli.prerequisites._runtime_environment_report")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_blocks_when_runtime_prerequisites_are_not_met(
         self,
@@ -612,7 +614,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Host install: blocked (environment)", result.output)
         mock_resolve.assert_not_called()
 
-    @patch("depshieldx.cli.serve_ui")
+    @patch("depshieldx.cli.commands.ui.serve_ui")
     def test_cli_ui_command_passes_port_and_open_preferences(self, mock_serve_ui):
         runner = CliRunner()
 
@@ -621,10 +623,10 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_OK)
         mock_serve_ui.assert_called_once_with(port=8123, open_browser=False, echo=ANY)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
-    @patch("depshieldx.cli._run_cli_command")
+    @patch("depshieldx.cli.engine._run_cli_command")
     def test_cli_install_groups_warning_and_info_output(
         self,
         _mock_run_cli,
@@ -663,7 +665,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertNotIn("Scan Info:", result.output)
         self.assertNotIn("Policy Info:", result.output)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_scan_supports_requirements_file(
         self,
@@ -696,8 +698,8 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Host install: skipped (scan_only)", result.output)
         mock_fast_checks.assert_called_once()
 
-    @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.run_sandbox")
+    @patch("depshieldx.cli.engine._run_fast_checks")
+    @patch("depshieldx.cli.engine.run_sandbox")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_scan_deep_supports_pyproject_file(
         self,
@@ -743,7 +745,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Trivy verdict: passed (0 finding(s))", result.output)
         self.assertIn("Host install: skipped (scan_only)", result.output)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_install_full_report_includes_json_block(
         self,
@@ -767,10 +769,10 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Summary", result.output)
         self.assertIn("Report\n{", result.output)
 
-    @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.requests.get")
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli.run_sandbox")
+    @patch("depshieldx.cli.engine._run_fast_checks")
+    @patch("depshieldx.cli.engine.requests.get")
+    @patch("depshieldx.cli.engine._run_cli_command")
+    @patch("depshieldx.cli.engine.run_sandbox")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_deep_install_uses_host_pip_after_trivy_passes(
         self,
@@ -850,9 +852,9 @@ class FormatSummaryTests(unittest.TestCase):
         )
         self.assertEqual(mock_run_cli.call_args.kwargs, {"verbose": False})
 
-    @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli.run_sandbox")
+    @patch("depshieldx.cli.engine._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_cli_command")
+    @patch("depshieldx.cli.engine.run_sandbox")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_deep_install_blocks_on_trivy(
         self,
@@ -899,8 +901,8 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("First Trivy finding: HIGH CVE-2026-1234", result.output)
         mock_run_cli.assert_not_called()
 
-    @patch("depshieldx.cli._run_fast_checks")
-    @patch("depshieldx.cli.run_sandbox")
+    @patch("depshieldx.cli.engine._run_fast_checks")
+    @patch("depshieldx.cli.engine.run_sandbox")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     def test_cli_deep_install_blocks_on_preinstall_vulnerability(
         self,
@@ -928,7 +930,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Host install: blocked (scan)", result.output)
         mock_run_sandbox.assert_not_called()
 
-    @patch("depshieldx.cli.subprocess.run")
+    @patch("depshieldx.cli.engine.subprocess.run")
     def test_run_cli_command_is_quiet_by_default(self, mock_run):
         mock_run.return_value = subprocess.CompletedProcess(
             args=["pip", "install", "flask"],
@@ -947,7 +949,7 @@ class FormatSummaryTests(unittest.TestCase):
             text=True,
         )
 
-    @patch("depshieldx.cli.subprocess.run")
+    @patch("depshieldx.cli.engine.subprocess.run")
     def test_run_cli_command_streams_when_verbose(self, mock_run):
         mock_run.return_value = subprocess.CompletedProcess(
             args=["pip", "install", "flask"],
@@ -972,11 +974,11 @@ class FormatSummaryTests(unittest.TestCase):
 
         self.assertEqual(exit_code, EXIT_OK)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli.enable_routing_shim")
+    @patch("depshieldx.cli.engine._run_cli_command")
+    @patch("depshieldx.cli.engine.enable_routing_shim")
     def test_cli_install_enable_routing_flag_enables_shim(
         self,
         mock_enable_routing,
@@ -1007,11 +1009,11 @@ class FormatSummaryTests(unittest.TestCase):
         mock_enable_routing.assert_called_once()
         self.assertIn("pip routing enabled", result.output)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli.disable_routing_shim")
+    @patch("depshieldx.cli.engine._run_cli_command")
+    @patch("depshieldx.cli.engine.disable_routing_shim")
     def test_cli_install_disable_routing_flag_disables_shim(
         self,
         mock_disable_routing,
@@ -1039,11 +1041,11 @@ class FormatSummaryTests(unittest.TestCase):
         mock_disable_routing.assert_called_once()
         self.assertIn("pip routing disabled", result.output)
 
-    @patch("depshieldx.cli.enable_routing_shim")
-    @patch("depshieldx.cli.should_prompt_for_routing", return_value=True)
-    @patch("depshieldx.cli.click.confirm", return_value=True)
-    @patch("depshieldx.cli.sys.stdout.isatty", return_value=True)
-    @patch("depshieldx.cli.sys.stdin.isatty", return_value=True)
+    @patch("depshieldx.cli.engine.enable_routing_shim")
+    @patch("depshieldx.cli.engine.should_prompt_for_routing", return_value=True)
+    @patch("depshieldx.cli.engine.click.confirm", return_value=True)
+    @patch("depshieldx.cli.engine.sys.stdout.isatty", return_value=True)
+    @patch("depshieldx.cli.engine.sys.stdin.isatty", return_value=True)
     def test_handle_routing_choice_prompts_and_accepts_yes(
         self,
         _mock_stdin_tty,
@@ -1062,12 +1064,12 @@ class FormatSummaryTests(unittest.TestCase):
         mock_confirm.assert_called_once()
         mock_enable_routing.assert_called_once()
 
-    @patch("depshieldx.cli.dismiss_routing_prompt")
-    @patch("depshieldx.cli.enable_routing_shim")
-    @patch("depshieldx.cli.should_prompt_for_routing", return_value=True)
-    @patch("depshieldx.cli.click.confirm", return_value=False)
-    @patch("depshieldx.cli.sys.stdout.isatty", return_value=True)
-    @patch("depshieldx.cli.sys.stdin.isatty", return_value=True)
+    @patch("depshieldx.cli.engine.dismiss_routing_prompt")
+    @patch("depshieldx.cli.engine.enable_routing_shim")
+    @patch("depshieldx.cli.engine.should_prompt_for_routing", return_value=True)
+    @patch("depshieldx.cli.engine.click.confirm", return_value=False)
+    @patch("depshieldx.cli.engine.sys.stdout.isatty", return_value=True)
+    @patch("depshieldx.cli.engine.sys.stdin.isatty", return_value=True)
     def test_handle_routing_choice_dismisses_prompt_on_no(
         self,
         _mock_stdin_tty,
@@ -1089,12 +1091,12 @@ class FormatSummaryTests(unittest.TestCase):
         mock_enable_routing.assert_not_called()
         mock_dismiss.assert_called_once()
 
-    @patch("depshieldx.cli.enable_routing_shim")
-    @patch("depshieldx.cli.should_prompt_for_routing", return_value=True)
-    @patch("depshieldx.cli.click.confirm", return_value=True)
-    @patch("depshieldx.cli.click.echo")
-    @patch("depshieldx.cli.sys.stdout.isatty", return_value=True)
-    @patch("depshieldx.cli.sys.stdin.isatty", return_value=True)
+    @patch("depshieldx.cli.engine.enable_routing_shim")
+    @patch("depshieldx.cli.engine.should_prompt_for_routing", return_value=True)
+    @patch("depshieldx.cli.engine.click.confirm", return_value=True)
+    @patch("depshieldx.cli.engine.click.echo")
+    @patch("depshieldx.cli.engine.sys.stdout.isatty", return_value=True)
+    @patch("depshieldx.cli.engine.sys.stdin.isatty", return_value=True)
     def test_handle_routing_choice_prompts_with_onboarding_for_depshieldx_install(
         self,
         _mock_stdin_tty,
@@ -1125,7 +1127,7 @@ class FormatSummaryTests(unittest.TestCase):
         with patch("depshieldx.routing.get_routing_status", return_value={"enabled": False, "prompt_dismissed": True}):
             self.assertFalse(should_prompt_for_routing())
 
-    @patch("depshieldx.cli.click.echo")
+    @patch("depshieldx.cli.engine.click.echo")
     def test_finalize_routing_after_install_shows_status_for_depshieldx(self, mock_echo):
         _finalize_routing_after_install(
             "depshieldx",
@@ -1140,12 +1142,12 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Manage later with: depshieldx routing enable | depshieldx routing disable", echoed_lines)
         self.assertIn('Activation: export PATH="/tmp/shims:$PATH"', echoed_lines)
 
-    @patch("depshieldx.cli._run_fast_checks")
+    @patch("depshieldx.cli.engine._run_fast_checks")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.resolve")
     @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.host_install_command")
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli._finalize_routing_after_install")
-    @patch("depshieldx.cli._prepare_routing_for_install")
+    @patch("depshieldx.cli.engine._run_cli_command")
+    @patch("depshieldx.cli.engine._finalize_routing_after_install")
+    @patch("depshieldx.cli.engine._prepare_routing_for_install")
     def test_cli_install_depshieldx_prepares_routing_before_install(
         self,
         mock_prepare_routing,
@@ -1176,7 +1178,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(result.exit_code, EXIT_OK)
         self.assertEqual(call_order, ["prepare", "install", "finalize"])
 
-    @patch("depshieldx.cli.get_routing_status")
+    @patch("depshieldx.cli.commands.routing.get_routing_status")
     def test_routing_status_command_prints_state(self, mock_status):
         mock_status.return_value = {
             "enabled": True,
@@ -1191,7 +1193,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Routing: enabled", result.output)
         self.assertIn("/tmp/shims/pip", result.output)
 
-    @patch("depshieldx.cli.subprocess.run")
+    @patch("depshieldx.cli.commands.routing.subprocess.run")
     def test_route_pip_routes_simple_install_to_depshieldx(self, mock_run):
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
 
@@ -1205,7 +1207,7 @@ class FormatSummaryTests(unittest.TestCase):
         )
         self.assertIn("Routing pip install through depshieldx", result.output)
 
-    @patch("depshieldx.cli.list_receipts")
+    @patch("depshieldx.cli.commands.receipts.list_receipts")
     def test_receipts_list_command_prints_receipts(self, mock_list_receipts):
         mock_list_receipts.return_value = [
             {
@@ -1224,7 +1226,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("2026-03-26T12:00:00+00:00  allowed  flask  abc123", result.output)
         self.assertIn("/tmp/receipt.json", result.output)
 
-    @patch("depshieldx.cli.verify_receipt", return_value={"valid": True, "path": "/tmp/receipt.json"})
+    @patch("depshieldx.cli.commands.receipts.verify_receipt", return_value={"valid": True, "path": "/tmp/receipt.json"})
     def test_receipts_verify_command_returns_success(self, mock_verify_receipt):
         runner = CliRunner()
         with runner.isolated_filesystem():
@@ -1236,7 +1238,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Receipt valid: /tmp/receipt.json", result.output)
         mock_verify_receipt.assert_called_once()
 
-    @patch("depshieldx.cli.verify_receipt", return_value={"valid": False, "path": "/tmp/receipt.json"})
+    @patch("depshieldx.cli.commands.receipts.verify_receipt", return_value={"valid": False, "path": "/tmp/receipt.json"})
     def test_receipts_verify_command_returns_blocked_for_invalid_receipt(self, mock_verify_receipt):
         runner = CliRunner()
         with runner.isolated_filesystem():
@@ -1248,7 +1250,7 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Receipt invalid: /tmp/receipt.json", result.output)
         mock_verify_receipt.assert_called_once()
 
-    @patch("depshieldx.cli.delete_receipts", return_value=4)
+    @patch("depshieldx.cli.commands.receipts.delete_receipts", return_value=4)
     def test_receipts_delete_command_reports_deleted_count(self, mock_delete_receipts):
         runner = CliRunner()
         result = runner.invoke(cli, ["receipts", "delete"])
@@ -1257,8 +1259,8 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Deleted 4 receipt(s).", result.output)
         mock_delete_receipts.assert_called_once()
 
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli.load_input_source")
+    @patch("depshieldx.cli.commands.uninstall._run_cli_command")
+    @patch("depshieldx.cli.engine.load_input_source")
     def test_uninstall_uses_package_names_from_targets(self, mock_load_input_source, mock_run_cli):
         from depshieldx.input_sources import InputSource
 
@@ -1278,8 +1280,8 @@ class FormatSummaryTests(unittest.TestCase):
         )
         self.assertIn("Uninstall completed.", result.output)
 
-    @patch("depshieldx.cli._run_cli_command")
-    @patch("depshieldx.cli.load_input_source")
+    @patch("depshieldx.cli.commands.uninstall._run_cli_command")
+    @patch("depshieldx.cli.engine.load_input_source")
     def test_uninstall_supports_requirements_file(self, mock_load_input_source, mock_run_cli):
         from depshieldx.input_sources import InputSource
 

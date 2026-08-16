@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from depshieldx.cli import (
+from depshieldx.cli import cli
+from depshieldx.cli.commands.routing import (
     _extract_simple_npm_family_install_targets,
     _is_plain_npm_family_install,
-    cli,
 )
 
 SAMPLE_PACKAGE_LOCK_JSON = {
@@ -88,10 +88,10 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
             lockfile = Path(temp_dir) / "package-lock.json"
             lockfile.write_text(json.dumps(SAMPLE_PACKAGE_LOCK_JSON), encoding="utf-8")
 
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.self_invoke_command") as mock_self_invoke:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake-depshieldx-install"]
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-npm", "install"])
@@ -104,10 +104,10 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             (Path(temp_dir) / "package-lock.json").write_text(json.dumps(SAMPLE_PACKAGE_LOCK_JSON), encoding="utf-8")
 
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.self_invoke_command") as mock_self_invoke:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake-depshieldx-install"]
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-npm", "install", "left-pad"])
@@ -118,10 +118,10 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
 
     def test_route_npm_installs_multiple_named_packages_through_depshieldx(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.self_invoke_command") as mock_self_invoke:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake-depshieldx-install"]
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-npm", "install", "left-pad", "is-odd"])
@@ -131,9 +131,9 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
 
     def test_route_npm_passes_through_when_naming_a_package_with_flags(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.resolve_node_tool", return_value="/usr/bin/npm"):
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.resolve_node_tool", return_value="/usr/bin/npm"):
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-npm", "install", "left-pad", "--save-dev"])
@@ -146,9 +146,9 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
         # installs still pass through untouched rather than silently
         # switching the user's package manager.
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.resolve_node_tool", return_value="/usr/bin/yarn"):
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.resolve_node_tool", return_value="/usr/bin/yarn"):
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-yarn", "install", "left-pad"])
@@ -158,9 +158,9 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
 
     def test_route_npm_passes_through_when_no_lockfile_present(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.resolve_node_tool", return_value="/usr/bin/npm"):
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.resolve_node_tool", return_value="/usr/bin/npm"):
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-npm", "install"])
@@ -173,10 +173,10 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
             lockfile = Path(temp_dir) / "yarn.lock"
             lockfile.write_text("# yarn lockfile v1\n", encoding="utf-8")
 
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.self_invoke_command") as mock_self_invoke:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake"]
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-yarn", "install"])
@@ -189,10 +189,10 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
             lockfile = Path(temp_dir) / "pnpm-lock.yaml"
             lockfile.write_text("lockfileVersion: '9.0'\n", encoding="utf-8")
 
-            with patch("depshieldx.cli.Path.cwd", return_value=Path(temp_dir)):
-                with patch("depshieldx.cli.self_invoke_command") as mock_self_invoke:
+            with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
+                with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake"]
-                    with patch("depshieldx.cli.subprocess.run") as mock_run:
+                    with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
                         mock_run.return_value.returncode = 0
                         runner = CliRunner()
                         result = runner.invoke(cli, ["route-pnpm", "install"])

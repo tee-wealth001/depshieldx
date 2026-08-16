@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from depshieldx.cli import _load_cli_input, cli
+from depshieldx.cli import cli
+from depshieldx.cli.engine import _load_cli_input
 
 SAMPLE_PACKAGE_LOCK_JSON = {
     "name": "sample-app",
