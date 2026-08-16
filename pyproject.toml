@@ -48,6 +48,9 @@ dev = [
     "pytest>=8.3",
     "jsonschema>=4.23",
 ]
+packaging = [
+    "pyinstaller>=6.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/tee-wealth001/depshieldx"
