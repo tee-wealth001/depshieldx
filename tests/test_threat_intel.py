@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from depshieldx.threat_intel import (
+    _normalize_name,
     check_threat_intelligence,
     fetch_cisa_kev,
     fetch_deps_dev_insights,
@@ -182,3 +183,55 @@ class ThreatIntelTests(unittest.TestCase):
         self.assertEqual(result["hits"], [])
         self.assertEqual(len(result["warnings"]), 1)
         self.assertIn("deps.dev lookup unavailable", result["warnings"][0])
+
+    def test_normalize_name_folds_hyphens_for_pypi(self):
+        # PyPI/PEP 503 treats "-" and "_" as equivalent.
+        self.assertEqual(_normalize_name("Left-Pad", ecosystem="pypi"), "left_pad")
+
+    def test_normalize_name_preserves_hyphens_for_npm(self):
+        # npm package names are hyphen-significant -- "left-pad" is not "left_pad".
+        # Folding these together (the PyPI default) would silently break every npm lookup.
+        self.assertEqual(_normalize_name("left-pad", ecosystem="npm"), "left-pad")
+
+    @patch("depshieldx.threat_intel.requests.get")
+    def test_fetch_github_advisories_uses_npm_ecosystem_and_preserves_hyphens(self, mock_get):
+        mock_response = SimpleNamespace(
+            json=lambda: [
+                {
+                    "ghsa_id": "GHSA-npm-demo",
+                    "cve_id": "CVE-2024-9999",
+                    "severity": "high",
+                    "summary": "demo npm advisory",
+                    "epss": [],
+                    "vulnerabilities": [
+                        {
+                            "package": {"name": "left-pad"},
+                            "vulnerable_version_range": "< 2.0.0",
+                            "first_patched_version": {"identifier": "2.0.0"},
+                        }
+                    ],
+                }
+            ],
+            raise_for_status=lambda: None,
+        )
+        mock_get.return_value = mock_response
+
+        result = fetch_github_advisories(["left-pad"], resolved_versions={"left-pad": "1.3.0"}, ecosystem="npm")
+
+        self.assertEqual(mock_get.call_args.kwargs["params"]["ecosystem"], "npm")
+        self.assertEqual(result["hits"][0]["package"], "left-pad")
+        self.assertEqual(result["hits"][0]["ghsa_id"], "GHSA-npm-demo")
+
+    @patch("depshieldx.threat_intel.requests.get")
+    def test_fetch_deps_dev_insights_uses_npm_system_in_url(self, mock_get):
+        mock_response = SimpleNamespace(
+            json=lambda: {"dependencies": [], "advisories": []},
+            raise_for_status=lambda: None,
+        )
+        mock_get.return_value = mock_response
+
+        fetch_deps_dev_insights(["left-pad"], resolved_versions={"left-pad": "1.3.0"}, ecosystem="npm")
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertIn("/systems/npm/", requested_url)
+        self.assertNotIn("/systems/pypi/", requested_url)

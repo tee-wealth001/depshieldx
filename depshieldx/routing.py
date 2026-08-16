@@ -32,12 +32,35 @@ def _shim_path() -> Path:
     return _shim_dir() / _shim_filename()
 
 
+# npm/yarn/pnpm shims layered on top of the original pip-only design (see
+# final-plan.md Phase 1 -- "this now needs to support multiple simultaneous
+# shims instead of one"). Kept as a separate, parallel set of functions
+# rather than folding "pip" into this list, so the existing pip-specific
+# behavior above stays untouched and its tests keep asserting on it directly.
+ADDITIONAL_MANAGED_TOOLS = ("npm", "yarn", "pnpm")
+
+
+def _shim_filename_for(tool: str) -> str:
+    return f"{tool}.bat" if _is_windows() else tool
+
+
+def _shim_path_for(tool: str) -> Path:
+    return _shim_dir() / _shim_filename_for(tool)
+
+
+def _shim_contents_for(tool: str) -> str:
+    if _is_windows():
+        return f"@echo off\ndepshieldx route-{tool} %*\n"
+    return f'#!/bin/sh\nexec depshieldx route-{tool} "$@"\n'
+
+
 def _known_shim_paths() -> tuple[Path, ...]:
     shim_dir = _shim_dir()
-    return (
-        shim_dir / "pip",
-        shim_dir / "pip.bat",
-    )
+    paths = [shim_dir / "pip", shim_dir / "pip.bat"]
+    for tool in ADDITIONAL_MANAGED_TOOLS:
+        paths.append(shim_dir / tool)
+        paths.append(shim_dir / f"{tool}.bat")
+    return tuple(paths)
 
 
 def _activation_hint(shim_dir: Path) -> str:
@@ -109,6 +132,13 @@ def enable_routing() -> dict:
     shim.write_text(_shim_contents())
     if not _is_windows():
         shim.chmod(0o755)
+
+    for tool in ADDITIONAL_MANAGED_TOOLS:
+        tool_shim = _shim_path_for(tool)
+        tool_shim.write_text(_shim_contents_for(tool))
+        if not _is_windows():
+            tool_shim.chmod(0o755)
+
     _write_state(enabled=True, prompt_dismissed=False)
     return get_routing_status()
 

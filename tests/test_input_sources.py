@@ -39,6 +39,57 @@ class InputSourceTests(unittest.TestCase):
         self.assertEqual(source.source_type, "lockfile")
         self.assertEqual(source.label, "uv.lock")
         self.assertEqual(source.requested_targets, ["flask==3.1.3", "click==8.3.1"])
+        self.assertEqual(source.ecosystem, "pypi")
+
+    def test_load_input_source_defaults_to_pypi_ecosystem(self):
+        source = load_input_source(("flask",))
+
+        self.assertEqual(source.ecosystem, "pypi")
+
+    def test_load_input_source_honors_ecosystem_override_for_single_package(self):
+        source = load_input_source(("left-pad",), ecosystem="npm")
+
+        self.assertEqual(source.source_type, "package")
+        self.assertEqual(source.ecosystem, "npm")
+        self.assertEqual(source.requested_targets, ["left-pad"])
+
+    def test_load_input_source_honors_ecosystem_override_for_multiple_packages(self):
+        source = load_input_source(("left-pad", "is-odd"), ecosystem="npm")
+
+        self.assertEqual(source.source_type, "packages")
+        self.assertEqual(source.ecosystem, "npm")
+
+    def test_load_input_source_detects_package_lock_json_as_npm(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "package-lock.json"
+            path.write_text("{}")
+
+            source = load_input_source((), lockfile=str(path))
+
+        self.assertEqual(source.source_type, "lockfile")
+        self.assertEqual(source.ecosystem, "npm")
+        self.assertEqual(source.label, "package-lock.json")
+        # The lockfile path is passed through unparsed -- NpmEcosystem.resolve()
+        # parses it directly, unlike PyPI's lockfile handling above.
+        self.assertEqual(source.requested_targets, [str(path)])
+
+    def test_load_input_source_detects_yarn_lock_as_npm(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "yarn.lock"
+            path.write_text("# yarn lockfile v1\n")
+
+            source = load_input_source((), lockfile=str(path))
+
+        self.assertEqual(source.ecosystem, "npm")
+
+    def test_load_input_source_detects_pnpm_lock_yaml_as_npm(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "pnpm-lock.yaml"
+            path.write_text("lockfileVersion: '9.0'\n")
+
+            source = load_input_source((), lockfile=str(path))
+
+        self.assertEqual(source.ecosystem, "npm")
 
     def test_load_input_source_for_pyproject(self):
         with tempfile.TemporaryDirectory() as temp_dir:

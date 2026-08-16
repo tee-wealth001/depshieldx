@@ -27,6 +27,13 @@ SOURCES = {
     "deps_dev": "https://api.deps.dev/v3",
 }
 
+# depshieldx's internal ecosystem key -> OSV's own ecosystem enum value.
+# https://ossf.github.io/osv-schema/#affectedpackage-field
+OSV_ECOSYSTEM_NAMES = {
+    "pypi": "PyPI",
+    "npm": "npm",
+}
+
 # Increased timeout for better resilience on slower networks
 REQUEST_TIMEOUT = 10
 
@@ -137,13 +144,14 @@ def _fetch_nvd_cves(package_name: str) -> List[VersionVulnerability]:
     return []
 
 
-async def _async_fetch_osv_cves_inner(session: aiohttp.ClientSession, package_name: str) -> List[VersionVulnerability]:
+async def _async_fetch_osv_cves_inner(
+    session: aiohttp.ClientSession, package_name: str, ecosystem: str = "pypi"
+) -> List[VersionVulnerability]:
     """Inner function for OSV fetch (without session management for retries)."""
     vulns = []
-    # OSV API query for Python packages
     url = "https://api.osv.dev/v1/query"
     payload = {
-        "package": {"name": package_name, "ecosystem": "PyPI"},
+        "package": {"name": package_name, "ecosystem": OSV_ECOSYSTEM_NAMES.get(ecosystem, "PyPI")},
     }
     
     async with session.post(
@@ -248,7 +256,7 @@ async def _async_fetch_osv_cves_inner(session: aiohttp.ClientSession, package_na
     return vulns
 
 
-async def _async_fetch_osv_cves(package_name: str) -> Tuple[str, List[VersionVulnerability]]:
+async def _async_fetch_osv_cves(package_name: str, ecosystem: str = "pypi") -> Tuple[str, List[VersionVulnerability]]:
     """Async: Fetch CVEs from OSV with retry logic."""
     vulns = []
     try:
@@ -257,6 +265,7 @@ async def _async_fetch_osv_cves(package_name: str) -> Tuple[str, List[VersionVul
                 _async_fetch_osv_cves_inner,
                 session,
                 package_name,
+                ecosystem=ecosystem,
                 max_retries=MAX_RETRIES,
             )
     except Exception as e:
@@ -307,7 +316,9 @@ async def _async_fetch_cisa_kev_cves(package_name: str) -> Tuple[str, List[Versi
     return "cisa-kev", vulns
 
 
-async def _async_fetch_deps_dev_cves(packages: List[str], resolved_versions: Optional[Dict[str, str]] = None) -> Tuple[str, Dict]:
+async def _async_fetch_deps_dev_cves(
+    packages: List[str], resolved_versions: Optional[Dict[str, str]] = None, ecosystem: str = "pypi"
+) -> Tuple[str, Dict]:
     """Async wrapper: Fetch insights from deps.dev with timeout protection."""
     try:
         # Import here to avoid circular import
@@ -317,7 +328,7 @@ async def _async_fetch_deps_dev_cves(packages: List[str], resolved_versions: Opt
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
-                lambda: fetch_deps_dev_insights(packages, resolved_versions=resolved_versions)
+                lambda: fetch_deps_dev_insights(packages, resolved_versions=resolved_versions, ecosystem=ecosystem)
             ),
             timeout=15.0  # 15 second timeout
         )
@@ -328,7 +339,9 @@ async def _async_fetch_deps_dev_cves(packages: List[str], resolved_versions: Opt
         return "deps-dev", {"hits": [], "warnings": ["deps.dev lookup unavailable"]}
 
 
-async def _async_fetch_github_advisories(packages: List[str], resolved_versions: Optional[Dict[str, str]] = None) -> Tuple[str, Dict]:
+async def _async_fetch_github_advisories(
+    packages: List[str], resolved_versions: Optional[Dict[str, str]] = None, ecosystem: str = "pypi"
+) -> Tuple[str, Dict]:
     """Async wrapper: Fetch GitHub Security Advisories with timeout protection."""
     try:
         # Import here to avoid circular import
@@ -338,7 +351,7 @@ async def _async_fetch_github_advisories(packages: List[str], resolved_versions:
         result = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
-                lambda: fetch_github_advisories(packages, resolved_versions=resolved_versions)
+                lambda: fetch_github_advisories(packages, resolved_versions=resolved_versions, ecosystem=ecosystem)
             ),
             timeout=15.0  # 15 second timeout
         )
@@ -369,24 +382,24 @@ async def _fetch_all_sources_concurrent(package_name: str) -> Dict[str, List]:
 
 
 async def _fetch_all_sources_for_packages_concurrent(
-    packages: List[str], resolved_versions: Optional[Dict[str, str]] = None
+    packages: List[str], resolved_versions: Optional[Dict[str, str]] = None, ecosystem: str = "pypi"
 ) -> Dict[str, any]:
     """
     Fetch from all sources concurrently for multiple packages.
     Handles both per-package (OSV, CISA KEV) and batch-level (GitHub, deps.dev) fetches.
     """
     tasks = []
-    
+
     # Per-package concurrent fetches (OSV + CISA KEV for each)
     per_package_tasks = []
     for pkg in packages:
-        per_package_tasks.append(_async_fetch_osv_cves(pkg))
+        per_package_tasks.append(_async_fetch_osv_cves(pkg, ecosystem=ecosystem))
         per_package_tasks.append(_async_fetch_cisa_kev_cves(pkg))
-    
+
     # Batch-level concurrent fetches (once for all packages)
     batch_tasks = [
-        _async_fetch_github_advisories(packages, resolved_versions),
-        _async_fetch_deps_dev_cves(packages, resolved_versions),
+        _async_fetch_github_advisories(packages, resolved_versions, ecosystem=ecosystem),
+        _async_fetch_deps_dev_cves(packages, resolved_versions, ecosystem=ecosystem),
     ]
     
     # Run all concurrently with timeout
@@ -589,11 +602,11 @@ def check_all_with_dependency_context(
     return result
 
 
-async def _fetch_all_with_timeout(packages, resolved_versions):
+async def _fetch_all_with_timeout(packages, resolved_versions, ecosystem="pypi"):
     """Wrap the concurrent fetch with a hard 20 second timeout."""
     try:
         return await asyncio.wait_for(
-            _fetch_all_sources_for_packages_concurrent(packages, resolved_versions),
+            _fetch_all_sources_for_packages_concurrent(packages, resolved_versions, ecosystem=ecosystem),
             timeout=20.0
         )
     except asyncio.TimeoutError:
@@ -606,18 +619,21 @@ async def _fetch_all_with_timeout(packages, resolved_versions):
 
 
 def fetch_all_sources_for_packages(
-    packages: List[str], resolved_versions: Optional[Dict[str, str]] = None
+    packages: List[str], resolved_versions: Optional[Dict[str, str]] = None, ecosystem: str = "pypi"
 ) -> Dict[str, any]:
     """
     Consolidated multi-source lookup: Fetch OSV, CISA KEV, GitHub advisories, and deps.dev
     for all packages concurrently in a single call.
-    
+
     This eliminates duplicate API calls and is the preferred method for scanner.py.
-    
+
     Args:
         packages: List of package names to check
         resolved_versions: Dict mapping package names to versions
-    
+        ecosystem: depshieldx's internal ecosystem key ("pypi", "npm", ...); translated to
+            each source's own naming convention (OSV_ECOSYSTEM_NAMES, GHSA/deps.dev equivalents
+            in threat_intel.py) since they don't share one naming scheme.
+
     Returns:
         Dict with:
         - 'osv_results': {package: [current_vulns, historical_vulns]}
@@ -627,7 +643,7 @@ def fetch_all_sources_for_packages(
     """
     try:
         # Run all concurrent fetches with timeout
-        all_sources = asyncio.run(_fetch_all_with_timeout(packages, resolved_versions))
+        all_sources = asyncio.run(_fetch_all_with_timeout(packages, resolved_versions, ecosystem))
     except Exception as e:
         return {
             "osv_results": {},

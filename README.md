@@ -3,9 +3,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/depshieldx.svg)](https://pypi.org/project/depshieldx/)
 [![Docs](https://img.shields.io/badge/docs-github%20pages-10b981)](https://tee-wealth001.github.io/depshieldx/)
 
-`depshieldx` is a safer wrapper around Python package install and scan workflows.
+`depshieldx` is a safer wrapper around package install and scan workflows. PyPI (Python) is the primary, most complete ecosystem; npm/yarn/pnpm (JavaScript) support is available in fast mode with a narrower scope -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support) for exactly what is and isn't covered yet.
 
-Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and can optionally run a deeper Docker + Trivy validation path. Every completed install or scan also writes signed local receipt JSON files.
+Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and (for PyPI) can optionally run a deeper Docker + Trivy validation path. Every completed install or scan also writes signed local receipt JSON files.
 
 ## Installation
 
@@ -29,15 +29,14 @@ Project links:
 
 ## What It Does
 
-- resolves the full dependency set before installation
-- checks provenance for the selected release artifacts on PyPI
-- verifies PyPI attestations when they are available
+- resolves the full dependency set before installation, for PyPI or npm/yarn/pnpm
+- checks provenance for the selected release artifacts (PyPI attestations, or structural npm registry signals)
 - queries 4 vulnerability sources for the resolved package versions:
   - OSV
   - GitHub Advisories
   - CISA KEV
   - deps.dev
-- supports a deeper Docker + Trivy scan mode
+- supports a deeper Docker + Trivy scan mode (PyPI only for now)
 - writes signed local receipts for installs and scans
 
 ## Quick Start
@@ -107,6 +106,8 @@ Windows support is improving, but macOS and Linux still have the broadest day-to
 
 Plain `install` and plain `scan` default to `fast`.
 
+`deep` is PyPI-only right now -- passing `--deep` with npm/yarn/pnpm input (`--ecosystem npm` or an npm-family lockfile) is rejected with a clear error rather than silently running fast mode instead.
+
 ### Fast mode
 
 Fast mode:
@@ -146,6 +147,40 @@ This same behavior applies to:
 - `requirements.txt`
 - `uv.lock`
 - `pyproject.toml`
+
+## npm / yarn / pnpm Support
+
+`depshieldx` can resolve, check, and install npm packages too, in fast mode only.
+
+Two ways to point it at npm:
+
+**A lockfile in the current directory** -- auto-detected by filename, no flag needed:
+
+```bash
+depshieldx scan --lockfile package-lock.json
+depshieldx scan --lockfile yarn.lock
+depshieldx scan --lockfile pnpm-lock.yaml
+depshieldx install --lockfile package-lock.json
+```
+
+**One or more bare package names** -- pass `--ecosystem npm` so `depshieldx` knows they aren't PyPI names:
+
+```bash
+depshieldx scan left-pad --ecosystem npm
+depshieldx install left-pad --ecosystem npm
+depshieldx install left-pad is-odd --ecosystem npm
+```
+
+Bare package-name resolution shells out to the real `npm` CLI in an isolated temp directory to compute the full, accurate transitive dependency tree, then checks that whole resolved set before installing. Installing pins each requested package to the exact version that was just checked (`npm install left-pad@1.3.0`), not a floating range, so nothing can drift to a different release between the scan and the install.
+
+If you have the [routing shim](#routing) enabled, `npm install <package>` is also intercepted automatically and routed through `depshieldx install <package> --ecosystem npm` -- you don't need to change your muscle memory.
+
+What's explicitly **not** supported yet for npm/yarn/pnpm:
+
+- `--deep` (Docker + Trivy) -- fast mode only; `--deep` is rejected with a clear error rather than silently downgrading
+- `depshieldx uninstall` -- also rejected with a clear error
+- cryptographic provenance verification -- npm provenance checks are structural only (attestation presence, deprecation status, homepage/contact metadata), not full Sigstore bundle verification the way PyPI attestations are checked; see [Provenance And Attestations](#provenance-and-attestations)
+- `requirements.txt`/`pyproject.toml`-style inputs -- those formats are inherently PyPI-specific; use a lockfile or `--ecosystem npm` instead
 
 ## Commands
 
@@ -258,20 +293,33 @@ depshieldx uninstall -r requirements.txt
 depshieldx uninstall --pyproject pyproject.toml
 ```
 
+npm packages and lockfiles:
+
+```bash
+depshieldx scan left-pad --ecosystem npm
+depshieldx install left-pad --ecosystem npm
+depshieldx install left-pad is-odd --ecosystem npm
+depshieldx scan --lockfile package-lock.json
+depshieldx install --lockfile yarn.lock
+depshieldx scan --lockfile pnpm-lock.yaml
+```
+
 ## Supported Inputs
 
 `depshieldx` accepts:
 
-- one package name
-- multiple package names
-- `-r requirements.txt`
-- `--lockfile uv.lock`
-- `--pyproject pyproject.toml`
+- one package name (PyPI by default, or npm with `--ecosystem npm`)
+- multiple package names (same ecosystem rule as above)
+- `-r requirements.txt` (PyPI only)
+- `--lockfile uv.lock` (PyPI)
+- `--lockfile package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` (npm, auto-detected by filename)
+- `--pyproject pyproject.toml` (PyPI only)
 
 Current lockfile behavior:
 
 - `uv.lock` is parsed directly
-- other lockfile-style inputs are treated like requirement-style pinned targets
+- `package-lock.json`, `yarn.lock`, and `pnpm-lock.yaml` are parsed directly
+- other PyPI lockfile-style inputs are treated like requirement-style pinned targets
 
 ## Output Modes
 
@@ -411,7 +459,7 @@ Receipts include package-level details such as:
 
 ## Routing
 
-`depshieldx` can optionally install a small `pip` shim so simple `pip install <package>` commands go through `depshieldx`.
+`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, and `pnpm install` commands go through `depshieldx`.
 
 ```bash
 depshieldx routing status
@@ -421,8 +469,17 @@ depshieldx routing disable
 
 Routing is platform-aware:
 
-- on macOS and Linux it creates a `pip` shell shim
-- on Windows it creates a `pip.bat` shim
+- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`)
+- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`)
+
+What each shim intercepts:
+
+- `pip install <package>` -- a single package name, routed through `depshieldx install <package>`
+- `npm install` / `npm i` / `npm ci` / `yarn install` / `pnpm install` with no package named -- routed through `depshieldx install --lockfile <lockfile-in-cwd>`, only when that lockfile is present
+- `npm install <package...>` / `npm i <package...>` -- one or more package names with no other flags, routed through `depshieldx install <package...> --ecosystem npm`
+- `yarn add <package>` / `pnpm add <package>` are **not** intercepted yet -- ad-hoc resolution in this phase only covers `npm install <package>`, so yarn/pnpm named installs pass straight through to the real tool
+
+Anything else (flags mixed in with a package name, other subcommands like `run`, global installs) passes straight through to the real tool untouched.
 
 Useful environment variables:
 
@@ -464,9 +521,11 @@ depshieldx ui
 - deep mode depends on Docker being available
 - deep mode also depends on Trivy being installed
 - deep mode is slower than fast mode
+- deep mode and `uninstall` are PyPI-only right now; both are rejected with a clear error for npm/yarn/pnpm input rather than silently skipped
 - the safety guarantees depend in part on the local Python and `pip` versions
 - some packages publish no PyPI attestations; that is usually informational
 - attestation verification can depend on upstream trust metadata availability
+- npm provenance checks are structural only (no cryptographic Sigstore bundle verification yet), see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support)
 - vulnerability-source coverage depends on the upstream services
 
 ## FAQ

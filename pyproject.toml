@@ -36,7 +36,8 @@ dependencies = [
     "requests>=2.32.4",
     "aiohttp>=3.12.14",
     "packaging",
-    "pypi-attestations>=0.0.28"
+    "pypi-attestations>=0.0.28",
+    "PyYAML>=6.0"
 ]
 
 [project.optional-dependencies]
@@ -61,3 +62,8 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["depshieldx*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: hits a real external network service (npm registry, OSV, GitHub Advisories, deps.dev, PyPI) whose availability/rate limits are outside our control. Not excluded by default -- run `pytest -m \"not live\"` for a fully offline/deterministic run.",
+]
