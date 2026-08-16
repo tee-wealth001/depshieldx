@@ -44,3 +44,10 @@ venv/
 ENV/
 env.bak/
 .venv/
+
+# Local planning/scratch notes, not project documentation
+agent-conversation.md
+another-plan.md
+final-plan.md
+findings.md
+open-plan.md
