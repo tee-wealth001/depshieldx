@@ -1,5 +1,8 @@
+import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,7 +28,7 @@ def _copy_fixture_download(artifact_path: Path):
 
 
 class FixturePackageIntegrationTests(unittest.TestCase):
-    @patch("depshieldx.cli.check_provenance_batch", return_value={"block": False, "warnings": [], "details": []})
+    @patch("depshieldx.ecosystems.PYPI_ECOSYSTEM.check_provenance", return_value={"block": False, "warnings": [], "details": []})
     @patch(
         "depshieldx.scanner.fetch_all_sources_for_packages",
         return_value={
@@ -104,3 +107,31 @@ class FixturePackageIntegrationTests(unittest.TestCase):
         self.assertEqual(result.error_type, "static_analysis")
         finding_codes = [finding["code"] for finding in result.static_analysis["findings"]]
         self.assertIn("binary_network_exec_combo", finding_codes)
+
+    def test_external_process_can_parse_scan_json_output(self):
+        # Proves the JSON contract (final-plan.md Phase 0, definition of done #8): a
+        # non-Python consumer -- here, a genuinely separate OS process, not an in-process
+        # CliRunner invocation -- can run `depshieldx scan ... --output json` and parse
+        # stdout directly as JSON, with no depshieldx internals available to it.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            wheel = build_safe_wheel(root, package_name="fixturepkg", version="1.0.0")
+
+            completed = subprocess.run(
+                [sys.executable, "-m", "depshieldx.cli", "scan", str(wheel), "--fast", "--output", "json"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={
+                    **os.environ,
+                    "DEPSHIELDX_CACHE_DIR": str(root / "cache"),
+                    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                },
+            )
+
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema_version"], "1")
+        self.assertEqual(payload["ecosystem"], "pypi")
+        self.assertEqual(payload["package"], str(wheel))
+        self.assertIn("resolution", payload)
+        self.assertIn("decision", payload.get("receipt", {}) or {})

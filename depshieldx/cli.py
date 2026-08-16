@@ -1,28 +1,24 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from contextlib import contextmanager
-import hashlib
 from importlib import metadata
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from urllib.parse import quote, unquote, urlparse
-from urllib.request import url2pathname
+from urllib.parse import quote
 import click
 from packaging.version import InvalidVersion, Version
 import requests
 
+from .ecosystems import PYPI_ECOSYSTEM, package_records
 from .input_sources import load_input_source
-from .provenance import check_provenance_batch
 from .receipts import ReceiptUnavailableError, delete_receipts, list_receipts, verify_receipt, write_receipt
-from .resolver import resolve_dependencies, resolve_install_inputs
 from .routing import (
     dismiss_routing_prompt,
     disable_routing as disable_routing_shim,
@@ -38,6 +34,7 @@ EXIT_OK = 0
 EXIT_BLOCKED = 10
 EXIT_SANDBOX_UNAVAILABLE = 11
 EXIT_INSTALL_FAILED = 12
+REPORT_SCHEMA_VERSION = "1"
 MIN_SECURE_PYTHON = (3, 11, 4)
 MIN_SECURE_PYTHON_LABEL = "3.11.4"
 MIN_SECURE_PIP_VERSION = Version("25.3")
@@ -49,20 +46,30 @@ def cli():
     pass
 
 
+# When True, progress/stage messages go to stderr instead of stdout, so stdout stays pure
+# JSON for `--output json` (final-plan.md Phase 0's "no human text mixed in" rule). Set once
+# per command invocation by install/scan before any stage output happens.
+_JSON_ONLY_OUTPUT = False
+
+
+def _progress_stream():
+    return sys.stderr if _JSON_ONLY_OUTPUT else sys.stdout
+
+
 def _echo_step(message):
-    click.echo(message)
+    click.echo(message, file=_progress_stream())
 
 
 def _echo_success(message):
-    click.secho(message, fg="green")
+    click.secho(message, fg="green", file=_progress_stream())
 
 
 def _echo_error(message):
-    click.secho(message, fg="red")
+    click.secho(message, fg="red", file=_progress_stream())
 
 
 def _write_stage_frame(message, suffix, *, newline=False):
-    stream = sys.stdout
+    stream = _progress_stream()
     line = f"\r\033[2K{message} {suffix}"
     if newline:
         line += "\n"
@@ -72,7 +79,7 @@ def _write_stage_frame(message, suffix, *, newline=False):
 
 @contextmanager
 def _stage_loader(message, *, verbose=False, animated=True):
-    if verbose or not sys.stdout.isatty() or not animated:
+    if verbose or not _progress_stream().isatty() or not animated:
         _echo_step(message)
         try:
             yield
@@ -115,9 +122,10 @@ def _verdict_summary(label, result):
 def _emit_message_group(label, messages, color):
     if not messages:
         return
-    click.secho(f"{label}:", fg=color)
+    stream = _progress_stream()
+    click.secho(f"{label}:", fg=color, file=stream)
     for message in messages:
-        click.secho(f"  - {message}", fg=color)
+        click.secho(f"  - {message}", fg=color, file=stream)
 
 
 def _emit_result_messages(label, result):
@@ -773,75 +781,6 @@ def _run_cli_command(command, verbose=False):
     )
 
 
-def _selected_artifact_entries(resolution):
-    selected_artifacts = resolution.selected_artifacts or {}
-    artifact_entries = []
-    seen = set()
-    artifact_lookup = {}
-    for package_name, artifacts in selected_artifacts.items():
-        artifact_lookup[_normalize_package_name(package_name)] = artifacts or []
-
-    for package_name, version in resolution.resolved_versions.items():
-        normalized = _normalize_package_name(package_name)
-        artifacts = artifact_lookup.get(normalized) or []
-        if not artifacts:
-            raise RuntimeError(f"missing selected artifact for resolved package {package_name}=={version}")
-        artifact = artifacts[0]
-        url = artifact.get("url")
-        filename = artifact.get("filename")
-        if not url or not filename:
-            raise RuntimeError(f"resolved artifact metadata incomplete for {package_name}=={version}")
-        key = (filename, url)
-        if key in seen:
-            continue
-        seen.add(key)
-        artifact_entries.append((package_name, version, artifact))
-    return artifact_entries
-
-
-def _copy_or_download_artifact(artifact, destination: Path):
-    url = artifact["url"]
-    filename = artifact["filename"]
-    destination_path = destination / filename
-    parsed = urlparse(url)
-
-    if parsed.scheme in {"", "file"}:
-        source_path = Path(url2pathname(parsed.path) if parsed.scheme == "file" else unquote(url)).expanduser()
-        if not source_path.exists():
-            raise RuntimeError(f"selected artifact path does not exist: {source_path}")
-        shutil.copy2(source_path, destination_path)
-        return destination_path
-
-    expected_sha256 = ((artifact.get("digests") or {}).get("sha256") or "").strip()
-    if not expected_sha256:
-        raise RuntimeError(f"selected artifact for {filename} is missing sha256 metadata")
-
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    artifact_bytes = response.content
-    actual_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
-    if actual_sha256 != expected_sha256:
-        raise RuntimeError(
-            f"downloaded artifact hash mismatch for {filename}: expected {expected_sha256}, got {actual_sha256}"
-        )
-    destination_path.write_bytes(artifact_bytes)
-    return destination_path
-
-
-@contextmanager
-def _host_install_command_for_resolution(resolution):
-    artifact_entries = _selected_artifact_entries(resolution)
-    with tempfile.TemporaryDirectory(prefix="depshieldx_host_install_") as temp_dir:
-        temp_path = Path(temp_dir)
-        artifact_paths = [
-            str(_copy_or_download_artifact(artifact, temp_path))
-            for _, _, artifact in artifact_entries
-        ]
-        if not artifact_paths:
-            raise RuntimeError("no selected artifacts were available for host install")
-        yield ["pip", "install", "--no-deps", *artifact_paths]
-
-
 def _render_report(report, output_mode="both"):
     prepared = _prepare_report_with_receipt(report)
     sections = []
@@ -879,13 +818,16 @@ def _determine_exit_code(report):
 
 
 def _finish(report, output_mode):
-    click.echo("")
     prepared = _prepare_report_with_receipt(report)
     if output_mode == "summary":
+        click.echo("")
         _echo_summary(prepared)
     elif output_mode == "json":
-        click.echo("Report\n" + json.dumps(prepared, indent=2, sort_keys=True))
+        # Pure JSON on stdout, no human text mixed in -- this is the stable, documented
+        # contract any language can parse (final-plan.md Phase 0).
+        click.echo(json.dumps(prepared, indent=2, sort_keys=True))
     else:
+        click.echo("")
         _echo_summary(prepared)
         click.echo("")
         click.echo("Report\n" + json.dumps(prepared, indent=2, sort_keys=True))
@@ -984,9 +926,7 @@ def _load_cli_input(targets, requirement_file=None, lockfile=None, pyproject_fil
 
 
 def _resolve_input_source(input_source):
-    if input_source.source_type == "package":
-        return resolve_dependencies(input_source.requested_targets[0])
-    return resolve_install_inputs(
+    return PYPI_ECOSYSTEM.resolve(
         input_source.pip_args,
         input_source.requested_targets,
         input_source.label,
@@ -1004,6 +944,7 @@ def _record_resolution(report, resolution):
         "source_type": resolution.source_type,
         "resolution_succeeded": resolution.resolution_succeeded,
         "resolution_error": resolution.resolution_error,
+        "package_records": [record.__dict__ for record in package_records(report["ecosystem"], resolution)],
     }
 
 
@@ -1076,7 +1017,7 @@ def _run_fast_checks(resolution, verbose=False):
     with ThreadPoolExecutor(max_workers=2) as executor:
         provenance_future = executor.submit(
             _run_guarded,
-            check_provenance_batch,
+            PYPI_ECOSYSTEM.check_provenance,
             _provenance_failure,
             resolution.resolved_versions,
             selected_artifacts=resolution.selected_artifacts,
@@ -1094,6 +1035,8 @@ def _run_fast_checks(resolution, verbose=False):
 
 def _build_report(package_name, mode, operation):
     return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "ecosystem": PYPI_ECOSYSTEM.name,
         "package": package_name,
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "mode": mode,
@@ -1159,7 +1102,7 @@ def _perform_host_install(
     routing_status = _prepare_routing_for_install(package_name, enable_routing, disable_routing)
     try:
         with _stage_loader("Installing resolved package set on host...", verbose=verbose):
-            with _host_install_command_for_resolution(resolution) as install_command:
+            with PYPI_ECOSYSTEM.host_install_command(resolution) as install_command:
                 _run_cli_command(install_command, verbose=verbose)
         report["install"] = {
             "attempted": True,
@@ -1388,6 +1331,9 @@ def install(
     if full_report and output_mode == "summary":
         output_mode = "both"
 
+    global _JSON_ONLY_OUTPUT
+    _JSON_ONLY_OUTPUT = output_mode == "json"
+
     routing_status = None
     mode = "deep" if deep else "fast"
     input_source = _load_cli_input(
@@ -1469,6 +1415,9 @@ def scan(targets, requirement_file, lockfile, pyproject_file, fast, deep, no_cac
     if full_report and output_mode == "summary":
         output_mode = "both"
 
+    global _JSON_ONLY_OUTPUT
+    _JSON_ONLY_OUTPUT = output_mode == "json"
+
     mode = "deep" if deep else "fast"
     input_source = _load_cli_input(
         targets,
@@ -1533,7 +1482,7 @@ def uninstall(targets, requirement_file, lockfile, pyproject_file, verbose):
         raise click.UsageError("Could not determine which packages to uninstall")
 
     with _stage_loader(f"Uninstalling packages for {input_source.label}...", verbose=verbose):
-        _run_cli_command(["pip", "uninstall", "-y", *uninstall_args], verbose=verbose)
+        _run_cli_command(PYPI_ECOSYSTEM.uninstall_command(uninstall_args), verbose=verbose)
     _echo_success("Uninstall completed.")
     if requirement_file:
         click.echo(f"Removed packages listed in {input_source.label}.")

@@ -12,7 +12,7 @@ from urllib.parse import quote
 from .cache import get_cache_root
 
 
-RECEIPT_SCHEMA_VERSION = 1
+RECEIPT_SCHEMA_VERSION = 2
 
 
 class ReceiptUnavailableError(RuntimeError):
@@ -399,6 +399,7 @@ def build_receipt(report: dict, *, package_name: str | None = None, package_vers
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "created_at": created_at,
         "decision": _decision_for_report(report_without_receipt),
+        "ecosystem": report_without_receipt.get("ecosystem", "pypi"),
         "package": package_name or report_without_receipt.get("package"),
         "package_version": package_version,
         "mode": report_without_receipt.get("mode"),
