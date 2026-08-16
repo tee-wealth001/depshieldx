@@ -226,5 +226,36 @@ class NpmEcosystem:
     def uninstall_command(self, package_names: list[str]) -> list[str]:
         return [resolve_node_tool("npm"), "uninstall", *package_names]
 
+    def direct_dependency_names_for_lockfile(self, lockfile_path: str) -> list[str]:
+        """The names a user would expect `depshieldx uninstall --lockfile ...`
+        to remove: the packages actually declared in package.json, not every
+        transitively-resolved name the lockfile also lists.
+
+        None of the three lockfile formats package_lockfiles.py parses
+        reliably distinguish direct from transitive dependencies on their
+        own -- package-lock.json's root "" entry does, but yarn.lock (a
+        flat, format-agnostic listing) and pnpm-lock.yaml's "packages" map
+        don't. package.json's own "dependencies"/"devDependencies" keys are
+        the one source of truth all three package managers agree on, and
+        it's the file real npm/yarn/pnpm "uninstall"/"remove" commands
+        themselves update -- so read that instead of trying to infer
+        directness per lockfile format.
+        """
+        package_json_path = Path(lockfile_path).parent / "package.json"
+        if not package_json_path.exists():
+            raise RuntimeError(
+                f"no package.json found next to {lockfile_path} -- can't determine which "
+                "packages are direct dependencies to uninstall"
+            )
+        manifest = json.loads(package_json_path.read_text(encoding="utf-8"))
+        names = []
+        seen = set()
+        for section in ("dependencies", "devDependencies"):
+            for name in (manifest.get(section) or {}):
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        return names
+
 
 NPM_ECOSYSTEM = NpmEcosystem()
