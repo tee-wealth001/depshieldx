@@ -926,7 +926,11 @@
       if (row.kind) meta.push(["Type", row.kind]);
       if (row.id) meta.push(["ID", row.id]);
       if (row.path) meta.push(["Path", row.path]);
-      if (row.package) meta.push(["Package", row.package + (row.package_version ? "==" + row.package_version : "")]);
+      if (row.package) {
+        const versionSeparator = row.ecosystem === "npm" ? "@" : "==";
+        meta.push(["Package", row.package + (row.package_version ? versionSeparator + row.package_version : "")]);
+      }
+      if (row.ecosystem) meta.push(["Ecosystem", row.ecosystem]);
       if (row.created_at) meta.push(["Created", row.created_at]);
       if (row.cached_at) meta.push(["Cached", row.cached_at]);
 

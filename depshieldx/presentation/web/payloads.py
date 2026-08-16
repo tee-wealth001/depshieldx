@@ -51,6 +51,7 @@ def _receipt_rows() -> list[dict]:
                 "id": payload.get("receipt_id") or path.stem,
                 "created_at": _format_timestamp(payload.get("created_at")),
                 "decision": payload.get("decision"),
+                "ecosystem": payload.get("ecosystem", "pypi"),
                 "package": payload.get("package"),
                 "package_version": payload.get("package_version"),
                 "mode": payload.get("mode"),
