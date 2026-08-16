@@ -10,13 +10,14 @@ from unittest.mock import patch
 from depshieldx.cache import CacheEntry
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.sandbox import (
-    NODE_DOCKER_IMAGE,
+    NPM_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
     SandboxResult,
     TEXT_SUBPROCESS_KWARGS,
     _build_locked_requirements,
     _docker_daemon_available,
+    _ensure_npm_sandbox_image,
     _extract_report,
     _run_command,
     _sandbox_cache_fingerprint,
@@ -325,15 +326,39 @@ class NpmSandboxTests(unittest.TestCase):
 
         self.assertNotEqual(pypi_fingerprint, npm_fingerprint)
 
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_npm_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_npm_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_npm_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_npm_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(NPM_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("npm_sandbox.Dockerfile", " ".join(build_command))
+
     @patch("depshieldx.sandbox.subprocess.run")
     @patch("depshieldx.sandbox._scan_host_install_dir")
     @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_npm_sandbox_image")
     @patch("depshieldx.sandbox.prepare_npm_download_bundle")
     @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
     def test_run_sandbox_uses_node_image_and_npm_wrapper_for_npm_ecosystem(
         self,
         _mock_docker,
         mock_prepare_bundle,
+        mock_ensure_image,
         mock_run_command,
         mock_scan_container,
         mock_subprocess_run,
@@ -370,10 +395,15 @@ class NpmSandboxTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         mock_prepare_bundle.assert_called_once_with(NPM_ECOSYSTEM, {"left-pad": "1.3.0"})
+        mock_ensure_image.assert_called_once()
         docker_command = mock_run_command.call_args.args[0]
-        self.assertIn(NODE_DOCKER_IMAGE, docker_command)
+        self.assertIn(NPM_SANDBOX_IMAGE_TAG, docker_command)
         self.assertIn("sandbox_wrapper_npm.js", " ".join(docker_command))
         self.assertIn("HOME=/tmp", docker_command)
+        # No extra capabilities beyond the base --cap-drop ALL posture:
+        # strace only traces its own child process tree here, which needs
+        # no added capability -- verified directly against a real container.
+        self.assertNotIn("--cap-add", docker_command)
         mock_scan_container.assert_called_once()
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertTrue(scanned_dir.replace("\\", "/").endswith("/node_modules"))
