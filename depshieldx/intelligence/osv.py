@@ -12,6 +12,7 @@ from .models import VersionVulnerability
 OSV_ECOSYSTEM_NAMES = {
     "pypi": "PyPI",
     "npm": "npm",
+    "cargo": "crates.io",
 }
 
 

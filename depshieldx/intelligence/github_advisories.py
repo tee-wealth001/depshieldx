@@ -17,6 +17,7 @@ GITHUB_ADVISORIES_URL = "https://api.github.com/advisories"
 GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
     "pypi": "pip",
     "npm": "npm",
+    "cargo": "rust",
 }
 
 

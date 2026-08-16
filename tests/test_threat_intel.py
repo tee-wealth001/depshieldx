@@ -233,3 +233,47 @@ class ThreatIntelTests(unittest.TestCase):
         requested_url = mock_get.call_args.args[0]
         self.assertIn("/systems/npm/", requested_url)
         self.assertNotIn("/systems/pypi/", requested_url)
+
+    @patch("depshieldx.intelligence.github_advisories.requests.get")
+    def test_fetch_github_advisories_uses_rust_ecosystem_for_cargo(self, mock_get):
+        mock_response = SimpleNamespace(
+            json=lambda: [
+                {
+                    "ghsa_id": "GHSA-cargo-demo",
+                    "cve_id": "CVE-2024-8888",
+                    "severity": "moderate",
+                    "summary": "demo cargo advisory",
+                    "epss": [],
+                    "vulnerabilities": [
+                        {
+                            "package": {"name": "serde"},
+                            "vulnerable_version_range": "< 1.0.219",
+                            "first_patched_version": {"identifier": "1.0.219"},
+                        }
+                    ],
+                }
+            ],
+            raise_for_status=lambda: None,
+        )
+        mock_get.return_value = mock_response
+
+        result = fetch_github_advisories(["serde"], resolved_versions={"serde": "1.0.100"}, ecosystem="cargo")
+
+        # GitHub's advisory ecosystem enum for Rust is "rust", not "cargo" --
+        # confirmed directly against the live API during development.
+        self.assertEqual(mock_get.call_args.kwargs["params"]["ecosystem"], "rust")
+        self.assertEqual(result["hits"][0]["ghsa_id"], "GHSA-cargo-demo")
+
+    @patch("depshieldx.intelligence.deps_dev.requests.get")
+    def test_fetch_deps_dev_insights_uses_cargo_system_in_url(self, mock_get):
+        mock_response = SimpleNamespace(
+            json=lambda: {"dependencies": [], "advisories": []},
+            raise_for_status=lambda: None,
+        )
+        mock_get.return_value = mock_response
+
+        fetch_deps_dev_insights(["serde"], resolved_versions={"serde": "1.0.219"}, ecosystem="cargo")
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertIn("/systems/cargo/", requested_url)
+        self.assertNotIn("/systems/pypi/", requested_url)

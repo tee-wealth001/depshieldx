@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 import nodesemver
+import semver
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
@@ -57,6 +58,55 @@ def _npm_satisfies(version: str, spec: str) -> bool:
     return all(_npm_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+def _cargo_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using real
+    SemVer 2.0.0 ordering (Rust/Cargo versions strictly follow semver.org
+    2.0.0, unlike npm's historically loose validation, and unlike PEP 440,
+    which has materially different prerelease-ordering rules -- see
+    findings.md #11 for the exact npm/PEP-440 mismatch this already burned
+    once). A bare version with no operator prefix is treated as an exact
+    match, mirroring the npm branch's convention above.
+
+    Deliberately compares via semver.Version's plain ordering operators
+    (>=, <=, etc.), not a requirement-range/caret-satisfaction check --
+    same reasoning as the npm branch: Cargo's own caret-default
+    requirement-resolution rules are for dependency *declarations* in
+    Cargo.toml, not a general-purpose vulnerability-range ordering check.
+    Verified directly against real OSV crates.io advisory data (e.g. the
+    `time` crate's RUSTSEC-2026-0009) -- semver.Version.parse() correctly
+    handles the "X.Y.Z" and "X.Y.Z-0"-style boundaries OSV actually
+    produces.
+    """
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    try:
+        current = semver.Version.parse(version)
+        target = semver.Version.parse(boundary)
+    except ValueError:
+        return False
+
+    if operator == ">=":
+        return current >= target
+    if operator == "<=":
+        return current <= target
+    if operator == ">":
+        return current > target
+    if operator == "<":
+        return current < target
+    return current == target
+
+
+def _cargo_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_cargo_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -97,6 +147,9 @@ class VersionVulnerability:
 
         if ecosystem == "npm":
             return self._is_current_version_vulnerable_npm(version)
+
+        if ecosystem == "cargo":
+            return self._is_current_version_vulnerable_cargo(version)
 
         try:
             check_version = Version(version)
@@ -139,6 +192,28 @@ class VersionVulnerability:
                 if nodesemver.lt(version, self.fixed_in_version, False):
                     return True
             except Exception:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_cargo(self, version: str) -> bool:
+        try:
+            current_version = semver.Version.parse(version)
+        except ValueError:
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the PyPI/npm branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _cargo_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                if current_version < semver.Version.parse(self.fixed_in_version):
+                    return True
+            except ValueError:
                 pass
 
         return False
