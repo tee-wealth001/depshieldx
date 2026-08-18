@@ -648,6 +648,9 @@ def run_sandbox(
             # nothing new needs to be written back out for cargo (see the
             # is_cargo branch's comment).
             scan_base_dir = host_install_dir
+            # Extra --tmpfs mounts beyond the shared noexec /tmp above.
+            # Populated for cargo only -- see the is_cargo branch's comment.
+            extra_tmpfs_args: list[str] = []
 
             env_args = []
             if is_npm:
@@ -693,11 +696,16 @@ def run_sandbox(
                 wrapper_mount = f"{resource_path('sandbox_wrapper_cargo.py').parent}:/depshieldx:ro"
                 # prepare_cargo_download_bundle already built the vendor
                 # directory host-side, before the container ever runs, and
-                # `cargo fetch --offline` against a directory source writes
-                # nothing back into it (confirmed directly -- not even
-                # $CARGO_HOME is touched). So unlike npm/PyPI there's no new
-                # output that needs to survive tmpfs teardown via a
-                # bind-mounted install dir: host_install_dir/
+                # neither `cargo fetch --offline` nor a full `cargo build
+                # --offline` against a directory source writes anything back
+                # into it (confirmed directly for both). `cargo build` does
+                # attempt a few best-effort cache-lock writes under
+                # $CARGO_HOME, but those land on the image's read-only
+                # rootfs and fail harmlessly (EROFS/ENOENT) without blocking
+                # the build -- see sandbox_wrapper_cargo.py's docstring. So
+                # unlike npm/PyPI there's no new output that needs to
+                # survive tmpfs teardown via a bind-mounted install dir:
+                # host_install_dir/
                 # container_install_path below stay unused for cargo, and
                 # Trivy scans the host-side vendor directory directly
                 # (already bind-mounted read-only at /tmp/packages/vendor,
@@ -705,6 +713,24 @@ def run_sandbox(
                 container_install_path = "/tmp/depshieldx-cargo-unused"
                 host_scan_subpath = None
                 scan_base_dir = str(Path(bundle.temp_dir) / "vendor")
+                # A real `cargo build` (Stage 3) compiles and then *executes*
+                # build-script binaries and proc-macro dylibs out of its own
+                # target/ directory -- reproduced directly that this fails
+                # with "Permission denied" under the shared --tmpfs
+                # /tmp:...,noexec above (fine for Stage 2's fetch-only
+                # posture, incompatible with actually building). Fix: give
+                # the whole scratch project directory (not just target/,
+                # which hits the exact same auto-created-root-owned-parent
+                # bug already solved for npm's node_modules mount above) its
+                # own exec-permitted tmpfs, layered over the still-noexec
+                # outer /tmp -- confirmed directly this lets a real
+                # proc-macro-heavy build (serde+serde_derive+syn) complete
+                # while the vendor directory and everything else under /tmp
+                # stays non-executable.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-cargo-install:rw,nosuid,nodev,exec,size=256m",
+                ]
                 _ensure_cargo_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
@@ -744,6 +770,7 @@ def run_sandbox(
                 SANDBOX_USER,
                 "--tmpfs",
                 "/tmp:rw,noexec,nosuid,nodev,size=256m",
+                *extra_tmpfs_args,
                 "--workdir",
                 "/tmp",
                 *env_args,

@@ -503,7 +503,7 @@ class CargoSandboxTests(unittest.TestCase):
         mock_run_command.return_value = subprocess.CompletedProcess(
             args=["docker", "run"],
             returncode=0,
-            stdout=REPORT_PREFIX + '{"fetch_exit_code": 0, "suspicious": false}',
+            stdout=REPORT_PREFIX + '{"build_exit_code": 0, "suspicious": false}',
             stderr="",
         )
         mock_scan_container.return_value = {"scanned": True, "should_block": False}
@@ -530,6 +530,14 @@ class CargoSandboxTests(unittest.TestCase):
         self.assertIn("python3", docker_command)
         self.assertIn("serde@=1.0.219", docker_command)
         self.assertIn("/tmp/packages/vendor", docker_command)
+        # A real `cargo build` needs to execute what it just compiled out of
+        # its own scratch project's target/ dir -- confirmed directly this
+        # fails under the shared noexec /tmp, so the whole scratch project
+        # dir gets its own exec-permitted tmpfs layered on top.
+        self.assertIn(
+            "/tmp/depshieldx-cargo-install:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
 
         # No new output needs to survive tmpfs teardown for cargo -- the
         # vendor directory was already built host-side, so Trivy scans it
