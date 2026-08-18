@@ -15,6 +15,14 @@ from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel
 from ..artifact_analysis import analyze_artifacts
 from ...storage.cache import fingerprint_artifacts, load_cache_entry, store_cache_entry
 from ...ecosystems import PYPI_ECOSYSTEM
+from ...ecosystems.go.registry import (
+    escape_module_path,
+    fetch_go_mod_text,
+    fetch_module_zip,
+    fetch_version_metadata,
+    hash1_of_go_mod,
+    hash1_of_zip,
+)
 from ...core.resolver import ResolutionResult
 from ...core.runtime import pip_command, resource_path, system_python_executable
 from ..trivy import scan_filesystem
@@ -31,6 +39,14 @@ NPM_SANDBOX_IMAGE_TAG = "depshieldx-npm-sandbox:node20"
 # latter confirmed missing from the base image too, unlike python:3.11
 # which already has an interpreter for PyPI's own wrapper).
 CARGO_SANDBOX_IMAGE_TAG = "depshieldx-cargo-sandbox:rust1"
+# Same reasoning as CARGO_SANDBOX_IMAGE_TAG -- built locally from
+# security/sandbox/docker/go_sandbox.Dockerfile (golang:1-bookworm +
+# strace + python3). There is no "golang:1-slim" tag (confirmed directly
+# against Docker Hub's real tag list), unlike rust:1-slim/node:20 --
+# golang:1-bookworm is the closest equivalent, and already ships python3
+# in its base layer (confirmed directly), though the Dockerfile still
+# installs it explicitly for robustness, matching the other two images.
+GO_SANDBOX_IMAGE_TAG = "depshieldx-go-sandbox:go1"
 SANDBOX_USER = "65534:65534"
 
 
@@ -252,6 +268,31 @@ def _ensure_cargo_sandbox_image(verbose: bool = False) -> None:
     _run_command(build_command, verbose=verbose)
 
 
+def _ensure_go_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's golang:1-bookworm + strace + python3 image if it
+    isn't already present locally. Mirrors _ensure_cargo_sandbox_image
+    exactly."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", GO_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("security/sandbox/docker/go_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        GO_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
 def _run_local_sandbox(bundle: DownloadBundle, install_targets: list[str], verbose: bool) -> subprocess.CompletedProcess:
     command = [
         system_python_executable(),
@@ -460,6 +501,108 @@ def prepare_cargo_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
         raise
 
 
+def prepare_go_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """Go's counterpart to prepare_cargo_download_bundle -- downloads every
+    resolved module's real .info/.mod/.zip content from the real GOPROXY
+    (proxy.golang.org, via ecosystems/go/registry.py's already-verified
+    fetchers) and lays it out host-side exactly as Go's own file-based
+    GOPROXY protocol expects (<escaped-module>/@v/<version>.{info,mod,zip}
+    under a "goproxy/" subdirectory), so the sandboxed `go mod download`
+    (sandbox_wrapper_go.py) can resolve entirely offline via
+    GOPROXY=file://... -- confirmed directly against a real Docker
+    container under this project's full isolation posture (--network none,
+    --read-only, --cap-drop ALL, non-root user).
+
+    Also writes go.mod (every resolved module as a direct requirement,
+    same "pin everything, not just the requested targets" reasoning as
+    prepare_cargo_download_bundle) and go.sum host-side, computed directly
+    from the just-downloaded zip/mod bytes via go_registry.py's Hash1
+    reimplementation -- avoiding a second network round-trip to
+    sum.golang.org's lookup endpoint for the same values
+    fetch_module_checksum() would return, since the exact bytes are
+    already on hand and the algorithm's correctness is independently
+    verified (see ecosystems/go/registry.py's module docstring). The .info
+    file's content isn't part of any go.sum hash (confirmed directly --
+    only the .zip and .mod hashes are), so re-serializing its parsed JSON
+    rather than storing the exact original bytes is safe.
+
+    Every downloaded .zip is also copied flat into temp_dir's root (not
+    just the nested goproxy/ layout) so analyze_artifacts() finds it the
+    same way it already finds .whl/.crate files -- Go module zips are
+    plain zip archives (confirmed directly), so the existing generic
+    zip-extraction branch in artifact_analysis.py needs no Go-specific
+    code, only ".go" added to TEXT_EXTENSIONS.
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        proxy_dir = Path(temp_dir) / "goproxy"
+        go_sum_lines: List[str] = []
+        for module, version in resolved_versions.items():
+            # The local file-based proxy follows the same "!"-escaping the
+            # real network GOPROXY protocol requires for uppercase-letter
+            # module paths (confirmed directly for the network path in
+            # ecosystems/go/registry.py; both share the same underlying
+            # module-fetcher code in the real `go` toolchain).
+            module_v_dir = proxy_dir / escape_module_path(module) / "@v"
+            module_v_dir.mkdir(parents=True, exist_ok=True)
+
+            info_payload = fetch_version_metadata(module, version)
+            (module_v_dir / f"{version}.info").write_bytes(json.dumps(info_payload).encode("utf-8"))
+
+            mod_text = fetch_go_mod_text(module, version)
+            if mod_text is None:
+                raise RuntimeError(f"could not fetch go.mod for {module}@{version}")
+            # write_bytes, not write_text: write_text silently translates
+            # "\n" to the platform newline (CRLF on Windows), which changes
+            # the file's actual on-disk bytes relative to whatever was
+            # hashed below -- confirmed directly this causes a real
+            # "checksum mismatch" SECURITY ERROR from `go mod download`
+            # itself when this bundle is built on a Windows host, since the
+            # go.sum hash is computed from the original (LF) mod_text
+            # string but the file on disk had been silently rewritten to
+            # CRLF.
+            mod_bytes = mod_text.encode("utf-8")
+            (module_v_dir / f"{version}.mod").write_bytes(mod_bytes)
+
+            zip_bytes = fetch_module_zip(module, version)
+            (module_v_dir / f"{version}.zip").write_bytes(zip_bytes)
+            (module_v_dir / "list").write_bytes((version + "\n").encode("utf-8"))
+
+            flat_name = f"{module.replace('/', '_')}@{version}.zip"
+            (Path(temp_dir) / flat_name).write_bytes(zip_bytes)
+
+            go_sum_lines.append(f"{module} {version} {hash1_of_zip(zip_bytes)}")
+            go_sum_lines.append(f"{module} {version}/go.mod {hash1_of_go_mod(mod_bytes)}")
+
+        go_mod_lines = ["module depshieldx-sandbox", "", "go 1.21", ""]
+        go_mod_lines.extend(
+            f"require {module} {version}" for module, version in sorted(resolved_versions.items())
+        )
+        (Path(temp_dir) / "go.mod").write_bytes(("\n".join(go_mod_lines) + "\n").encode("utf-8"))
+        (Path(temp_dir) / "go.sum").write_bytes(("\n".join(sorted(go_sum_lines)) + "\n").encode("utf-8"))
+
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -520,8 +663,11 @@ def run_sandbox(
     """
     is_npm = ecosystem.name == "npm"
     is_cargo = ecosystem.name == "cargo"
+    is_go = ecosystem.name == "go"
     docker_image = (
-        NPM_SANDBOX_IMAGE_TAG if is_npm else CARGO_SANDBOX_IMAGE_TAG if is_cargo else DOCKER_IMAGE
+        NPM_SANDBOX_IMAGE_TAG
+        if is_npm
+        else CARGO_SANDBOX_IMAGE_TAG if is_cargo else GO_SANDBOX_IMAGE_TAG if is_go else DOCKER_IMAGE
     )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
@@ -576,6 +722,8 @@ def run_sandbox(
             bundle = prepare_npm_download_bundle(ecosystem, resolved_versions or {})
         elif is_cargo:
             bundle = prepare_cargo_download_bundle(ecosystem, resolved_versions or {})
+        elif is_go:
+            bundle = prepare_go_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -732,6 +880,50 @@ def run_sandbox(
                     "/tmp/depshieldx-cargo-install:rw,nosuid,nodev,exec,size=256m",
                 ]
                 _ensure_cargo_sandbox_image(verbose=verbose)
+            elif is_go:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_go.py",
+                    "/tmp/packages",
+                    *[f"{name}@{version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('security/sandbox/sandbox_wrapper_go.py').parent}:/depshieldx:ro"
+                # prepare_go_download_bundle already built the go.mod/
+                # go.sum/goproxy/ layout host-side, before the container
+                # ever runs, and `go mod download` against a local file://
+                # proxy with GOFLAGS=-mod=readonly writes nothing back into
+                # the read-only-mounted bundle (confirmed directly) -- it
+                # only writes into $GOPATH/$GOCACHE, which
+                # sandbox_wrapper_go.py itself points at its own writable
+                # work directory below. So, like cargo, there's no new
+                # output that needs to survive tmpfs teardown via a
+                # bind-mounted install dir: host_install_dir/
+                # container_install_path stay unused for Go, and Trivy
+                # scans the host-side bundle directory directly (already
+                # bind-mounted read-only at /tmp/packages, since
+                # bundle.temp_dir itself is mounted there) -- Trivy's own
+                # Go support reads go.mod/go.sum natively, needing no
+                # extracted source tree the way cargo's Cargo.lock-less
+                # vendor directory does (confirmed directly: a real
+                # `trivy fs` scan of exactly this go.mod/go.sum layout
+                # correctly reported real CVEs for a known-vulnerable
+                # module).
+                container_install_path = "/tmp/depshieldx-go-unused"
+                host_scan_subpath = None
+                scan_base_dir = bundle.temp_dir
+                # sandbox_wrapper_go.py copies go.mod/go.sum into its own
+                # writable work directory and points $GOPATH/$GOCACHE
+                # there too (confirmed directly `go mod download` needs
+                # writable locations for its own bookkeeping, unlike
+                # cargo's directory-source fetch) -- needs its own
+                # exec-permitted tmpfs for the same auto-created-root-
+                # owned-parent reasoning as npm's/cargo's mounts above.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-go-work:rw,nosuid,nodev,exec,size=128m",
+                ]
+                env_args = ["-e", "HOME=/tmp"]
+                _ensure_go_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",
