@@ -41,8 +41,8 @@ from urllib.parse import quote
 
 import requests
 
-from ..go_lockfiles import parse_go_list_module_output
-from ..go_registry import (
+from .lockfiles import parse_go_list_module_output
+from .registry import (
     GOPROXY_BASE_URL,
     check_provenance_batch as go_check_provenance_batch,
     escape_module_path,
@@ -50,7 +50,7 @@ from ..go_registry import (
     fetch_version_metadata,
     hash1_of_zip,
 )
-from ..resolver import ResolutionResult
+from ...core.resolver import ResolutionResult
 
 # The scratch module's own name, used only for the bare "resolve a module
 # path with no existing project" flow -- excluded from the parsed `go

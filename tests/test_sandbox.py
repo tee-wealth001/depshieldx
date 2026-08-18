@@ -30,7 +30,7 @@ from depshieldx.sandbox import (
     prepare_npm_download_bundle,
     run_sandbox,
 )
-from depshieldx.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
+from depshieldx.security.sandbox.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
 
 
 class SandboxHelpersTests(unittest.TestCase):

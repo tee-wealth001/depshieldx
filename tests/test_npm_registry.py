@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from depshieldx.npm_registry import (
+from depshieldx.ecosystems.npm.registry import (
     NPM_SLSA_PREDICATE_TYPE,
     _attestation_signals,
     _integrity_digest_hex,
@@ -59,11 +59,11 @@ class NpmRegistryLiveTests(unittest.TestCase):
 
 
 class NpmRegistryCacheTests(unittest.TestCase):
-    @patch("depshieldx.npm_registry.fetch_attestation_bundles", return_value=[])
+    @patch("depshieldx.ecosystems.npm.registry.fetch_attestation_bundles", return_value=[])
     def test_check_release_uses_cache_on_second_call(self, _mock_attestations):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
-                with patch("depshieldx.npm_registry.fetch_package_metadata") as mock_fetch:
+                with patch("depshieldx.ecosystems.npm.registry.fetch_package_metadata") as mock_fetch:
                     mock_fetch.return_value = {
                         "versions": {"1.0.0": {"dist": {"integrity": "sha512-fake=="}}},
                         "dist-tags": {"latest": "1.0.0"},
@@ -78,7 +78,7 @@ class NpmRegistryCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
                 with patch(
-                    "depshieldx.npm_registry.fetch_package_metadata", side_effect=RuntimeError("network down")
+                    "depshieldx.ecosystems.npm.registry.fetch_package_metadata", side_effect=RuntimeError("network down")
                 ) as mock_fetch:
                     first = check_release("fixturepkg", "1.0.0")
                     second = check_release("fixturepkg", "1.0.0")
@@ -168,7 +168,7 @@ class NpmParseAttestationEntryTests(unittest.TestCase):
 
 
 class NpmAttestationSignalsTests(unittest.TestCase):
-    @patch("depshieldx.npm_registry.fetch_attestation_bundles", return_value=[])
+    @patch("depshieldx.ecosystems.npm.registry.fetch_attestation_bundles", return_value=[])
     def test_no_attestations_reports_unattested_signals(self, _mock_fetch):
         signals, messages = _attestation_signals("left-pad", "1.3.0", {"integrity": "sha512-fake=="})
 
@@ -176,8 +176,8 @@ class NpmAttestationSignalsTests(unittest.TestCase):
         self.assertFalse(signals["fully_verified_attestations"])
         self.assertIn("no npm provenance attestations", messages[0])
 
-    @patch("depshieldx.npm_registry._verify_slsa_bundle")
-    @patch("depshieldx.npm_registry.fetch_attestation_bundles")
+    @patch("depshieldx.ecosystems.npm.registry._verify_slsa_bundle")
+    @patch("depshieldx.ecosystems.npm.registry.fetch_attestation_bundles")
     def test_verified_slsa_attestation_reports_trusted_publisher(self, mock_fetch, mock_verify):
         mock_fetch.return_value = [
             {"predicateType": NPM_SLSA_PREDICATE_TYPE, "bundle": {"fake": "bundle"}},
@@ -191,8 +191,8 @@ class NpmAttestationSignalsTests(unittest.TestCase):
         self.assertTrue(signals["trusted_publisher"])
         self.assertEqual(messages, [])
 
-    @patch("depshieldx.npm_registry._verify_slsa_bundle")
-    @patch("depshieldx.npm_registry.fetch_attestation_bundles")
+    @patch("depshieldx.ecosystems.npm.registry._verify_slsa_bundle")
+    @patch("depshieldx.ecosystems.npm.registry.fetch_attestation_bundles")
     def test_failed_slsa_verification_is_reported_as_failure_not_unavailable(self, mock_fetch, mock_verify):
         mock_fetch.return_value = [
             {"predicateType": NPM_SLSA_PREDICATE_TYPE, "bundle": {"fake": "bundle"}},
@@ -216,7 +216,7 @@ class NpmAttestationSignalsTests(unittest.TestCase):
         self.assertIsNone(signals["verification_unavailable"])
         self.assertTrue(any("verification failed" in message for message in messages))
 
-    @patch("depshieldx.npm_registry.fetch_attestation_bundles")
+    @patch("depshieldx.ecosystems.npm.registry.fetch_attestation_bundles")
     def test_only_npm_publish_attestation_is_not_cryptographically_verifiable(self, mock_fetch):
         mock_fetch.return_value = [
             {
@@ -234,8 +234,8 @@ class NpmAttestationSignalsTests(unittest.TestCase):
 
 
 class NpmCheckReleaseBlockingTests(unittest.TestCase):
-    @patch("depshieldx.npm_registry._attestation_signals")
-    @patch("depshieldx.npm_registry.fetch_package_metadata")
+    @patch("depshieldx.ecosystems.npm.registry._attestation_signals")
+    @patch("depshieldx.ecosystems.npm.registry.fetch_package_metadata")
     def test_check_release_blocks_when_verification_attempted_and_failed(self, mock_fetch, mock_signals):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
@@ -262,8 +262,8 @@ class NpmCheckReleaseBlockingTests(unittest.TestCase):
         self.assertTrue(result["block"])
         self.assertIn("attestation verification failed", result["reason"])
 
-    @patch("depshieldx.npm_registry._attestation_signals")
-    @patch("depshieldx.npm_registry.fetch_package_metadata")
+    @patch("depshieldx.ecosystems.npm.registry._attestation_signals")
+    @patch("depshieldx.ecosystems.npm.registry.fetch_package_metadata")
     def test_check_release_does_not_block_when_verification_unavailable(self, mock_fetch, mock_signals):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):

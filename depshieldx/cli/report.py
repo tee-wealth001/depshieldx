@@ -4,7 +4,7 @@ up and eventually hands to output.py to render/finish."""
 from datetime import datetime, timezone
 
 from ..ecosystems import PYPI_ECOSYSTEM, package_records
-from ..receipts import ReceiptUnavailableError, write_receipt
+from ..storage.receipts import ReceiptUnavailableError, write_receipt
 
 REPORT_SCHEMA_VERSION = "1"
 

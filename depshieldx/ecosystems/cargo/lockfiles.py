@@ -15,27 +15,7 @@ import semver
 
 
 def parse_cargo_lock(path) -> dict[str, str]:
-    """Cargo legitimately allows the same crate name at two different
-    resolved versions simultaneously in one lockfile (e.g. a project
-    depending on both `syn` 2.x and 3.x transitively, because different
-    dependencies pin different major versions) -- confirmed directly against
-    ripgrep's real Cargo.lock, which has exactly this for "syn". Unlike PyPI
-    (one environment, one version) or npm's lockfile parsers (which already
-    silently flatten this the same way), a plain dict[str, str] can't
-    represent two versions of one name at once. When a name repeats here,
-    the newest version wins -- matching what a fresh `cargo add` on that
-    name would resolve to today -- and the older entry is silently dropped
-    from the returned map. This is an accepted, documented limitation, not
-    an oversight.
-
-    Path/workspace-member/git-sourced dependency entries have no "checksum"
-    field and often no "source" field either -- confirmed directly against
-    ripgrep's own workspace-member crates (e.g. "grep", "globset"), which
-    have neither. There is no crates.io tarball or checksum to fetch/verify
-    for these; callers (selected_artifact_entries/fetch_artifact) must
-    detect and skip them rather than assume every resolved package has a
-    fetchable registry artifact.
-    """
+    """Parse Cargo.lock and retain the newest version per crate name."""
     payload = tomllib.loads(Path(path).read_text(encoding="utf-8"))
     resolved: dict[str, str] = {}
     for entry in payload.get("package", []):

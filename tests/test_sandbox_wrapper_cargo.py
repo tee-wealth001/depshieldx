@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from depshieldx.sandbox_wrapper_cargo import (
+from depshieldx.security.sandbox.sandbox_wrapper_cargo import (
     INSTALL_DIR,
     VENDOR_MOUNT_PREFIX,
     _build_verdicts,
