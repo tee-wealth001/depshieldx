@@ -34,14 +34,14 @@ from pathlib import Path
 
 import requests
 
-from ..cargo_lockfiles import parse_cargo_lock
-from ..cargo_registry import (
+from .lockfiles import parse_cargo_lock
+from .registry import (
     CRATES_IO_BASE_URL,
     CRATES_IO_USER_AGENT,
     check_provenance_batch as cargo_check_provenance_batch,
     fetch_version_metadata,
 )
-from ..resolver import ResolutionResult
+from ...core.resolver import ResolutionResult
 
 # The scratch project's own manifest name, used only for the bare
 # "resolve a package name with no existing project" flow -- excluded from

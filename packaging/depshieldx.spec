@@ -4,10 +4,10 @@
 Build with: pyinstaller packaging/depshieldx.spec
 
 The two `datas` entries below are the exact, verified-working destinations
-for resource_path() (depshieldx/runtime.py) to find them at runtime: its
+for resource_path() (depshieldx/core/runtime.py) to find them at runtime: its
 frozen branch treats sys._MEIPASS as if it *were* the depshieldx/ package
-directory, matching its non-frozen branch (base = Path(__file__).parent,
-i.e. depshieldx/ itself). Bundling either file one level too deep (e.g.
+directory, matching its non-frozen branch (base = the depshieldx/ package
+directory). Bundling either file one level too deep (e.g.
 under an extra "depshieldx/" prefix) reproduces a real FileNotFoundError in
 `depshieldx ui` -- caught and fixed during development, not theoretical.
 """
@@ -21,9 +21,20 @@ a = Analysis(
     pathex=[REPO_ROOT],
     binaries=[],
     datas=[
-        (os.path.join(REPO_ROOT, "depshieldx", "sandbox_wrapper.py"), "."),
-        (os.path.join(REPO_ROOT, "depshieldx", "sandbox_wrapper_npm.js"), "."),
-        (os.path.join(REPO_ROOT, "depshieldx", "docker", "npm_sandbox.Dockerfile"), "docker"),
+        (os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "sandbox_wrapper.py"), "security/sandbox"),
+        (os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "sandbox_wrapper_npm.js"), "security/sandbox"),
+        (
+            os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "docker", "npm_sandbox.Dockerfile"),
+            "security/sandbox/docker",
+        ),
+        (
+            os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "docker", "cargo_sandbox.Dockerfile"),
+            "security/sandbox/docker",
+        ),
+        (
+            os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "sandbox_wrapper_cargo.py"),
+            "security/sandbox",
+        ),
         (
             os.path.join(REPO_ROOT, "depshieldx", "presentation", "web", "templates", "dashboard.html"),
             "presentation/web/templates",

@@ -66,7 +66,7 @@ from urllib.parse import quote
 import requests
 import semver
 
-from .cache import get_cache_root
+from ...storage.cache import get_cache_root
 
 GOPROXY_BASE_URL = "https://proxy.golang.org"
 SUMDB_BASE_URL = "https://sum.golang.org"

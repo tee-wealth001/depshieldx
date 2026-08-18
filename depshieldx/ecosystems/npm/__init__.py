@@ -1,8 +1,8 @@
-"""Compatibility alias for :mod:`depshieldx.security.sandbox.runner`."""
+"""Compatibility alias for the npm ecosystem implementation."""
 
 import sys
 
-from .security.sandbox import runner as _implementation
+from . import ecosystem as _implementation
 
 globals().update(
     {

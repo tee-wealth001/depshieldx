@@ -30,7 +30,7 @@ from pathlib import Path
 
 import requests
 
-from .cache import get_cache_root
+from ...storage.cache import get_cache_root
 
 CRATES_IO_VERSION_URL = "https://crates.io/api/v1/crates/{name}/{version}"
 CRATES_IO_BASE_URL = "https://crates.io"

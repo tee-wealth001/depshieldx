@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from depshieldx.npm_lockfiles import parse_lockfile, parse_package_lock_json, parse_pnpm_lock_yaml, parse_yarn_lock
+from depshieldx.ecosystems.npm.lockfiles import parse_lockfile, parse_package_lock_json, parse_pnpm_lock_yaml, parse_yarn_lock
 
 PACKAGE_LOCK_JSON_SAMPLE = {
     "name": "sample-app",

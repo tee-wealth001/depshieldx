@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from depshieldx.go_registry import (
+from depshieldx.ecosystems.go.registry import (
     check_provenance_batch,
     escape_module_path,
     fetch_module_checksum,
@@ -145,7 +145,7 @@ class CheckProvenanceBatchTests(unittest.TestCase):
         self.assertFalse(result["block"])
         self.assertEqual(result["details"], [])
 
-    @patch("depshieldx.go_registry.check_release")
+    @patch("depshieldx.ecosystems.go.registry.check_release")
     def test_blocks_on_retracted_version(self, mock_check_release):
         mock_check_release.return_value = {
             "package": "example.com/mod",
@@ -162,7 +162,7 @@ class CheckProvenanceBatchTests(unittest.TestCase):
         self.assertTrue(result["block"])
         self.assertIn("example.com/mod@v1.0.0", result["reason"])
 
-    @patch("depshieldx.go_registry.check_release")
+    @patch("depshieldx.ecosystems.go.registry.check_release")
     def test_passes_when_not_retracted(self, mock_check_release):
         mock_check_release.return_value = {
             "package": "example.com/mod",

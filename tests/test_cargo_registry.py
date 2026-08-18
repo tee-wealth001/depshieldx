@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from depshieldx.cargo_registry import check_provenance_batch, check_release
+from depshieldx.ecosystems.cargo.registry import check_provenance_batch, check_release
 
 
 @pytest.mark.live
@@ -58,11 +58,11 @@ class CargoRegistryLiveTests(unittest.TestCase):
 
 
 class CargoRegistryCacheTests(unittest.TestCase):
-    @patch("depshieldx.cargo_registry._throttle")
+    @patch("depshieldx.ecosystems.cargo.registry._throttle")
     def test_check_release_uses_cache_on_second_call(self, _mock_throttle):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
-                with patch("depshieldx.cargo_registry.fetch_version_metadata") as mock_fetch:
+                with patch("depshieldx.ecosystems.cargo.registry.fetch_version_metadata") as mock_fetch:
                     mock_fetch.return_value = {
                         "version": {"num": "1.0.0", "checksum": "abc123", "yanked": False, "trustpub_data": None}
                     }
@@ -72,12 +72,12 @@ class CargoRegistryCacheTests(unittest.TestCase):
                 self.assertEqual(mock_fetch.call_count, 1)
                 self.assertEqual(first, second)
 
-    @patch("depshieldx.cargo_registry._throttle")
+    @patch("depshieldx.ecosystems.cargo.registry._throttle")
     def test_network_failure_is_not_cached(self, _mock_throttle):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
                 with patch(
-                    "depshieldx.cargo_registry.fetch_version_metadata", side_effect=RuntimeError("network down")
+                    "depshieldx.ecosystems.cargo.registry.fetch_version_metadata", side_effect=RuntimeError("network down")
                 ) as mock_fetch:
                     first = check_release("fixturecrate", "1.0.0")
                     second = check_release("fixturecrate", "1.0.0")
@@ -88,11 +88,11 @@ class CargoRegistryCacheTests(unittest.TestCase):
 
 
 class CargoRegistryBlockingTests(unittest.TestCase):
-    @patch("depshieldx.cargo_registry._throttle")
+    @patch("depshieldx.ecosystems.cargo.registry._throttle")
     def test_yanked_release_blocks(self, _mock_throttle):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
-                with patch("depshieldx.cargo_registry.fetch_version_metadata") as mock_fetch:
+                with patch("depshieldx.ecosystems.cargo.registry.fetch_version_metadata") as mock_fetch:
                     mock_fetch.return_value = {
                         "version": {"num": "1.0.0", "checksum": "abc123", "yanked": True, "trustpub_data": None}
                     }
@@ -101,11 +101,11 @@ class CargoRegistryBlockingTests(unittest.TestCase):
         self.assertTrue(result["block"])
         self.assertEqual(result["reason"], "resolved release is yanked on crates.io")
 
-    @patch("depshieldx.cargo_registry._throttle")
+    @patch("depshieldx.ecosystems.cargo.registry._throttle")
     def test_trustpub_data_never_blocks_and_never_claims_verification(self, _mock_throttle):
         with tempfile.TemporaryDirectory() as cache_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}, clear=False):
-                with patch("depshieldx.cargo_registry.fetch_version_metadata") as mock_fetch:
+                with patch("depshieldx.ecosystems.cargo.registry.fetch_version_metadata") as mock_fetch:
                     mock_fetch.return_value = {
                         "version": {
                             "num": "1.0.0",
@@ -126,7 +126,7 @@ class CargoRegistryBlockingTests(unittest.TestCase):
         self.assertFalse(result["signals"]["verification_available"])
         self.assertFalse(result["signals"]["trusted_publisher"])
 
-    @patch("depshieldx.cargo_registry.check_release")
+    @patch("depshieldx.ecosystems.cargo.registry.check_release")
     def test_check_provenance_batch_blocks_on_first_failure(self, mock_check_release):
         mock_check_release.side_effect = [
             {

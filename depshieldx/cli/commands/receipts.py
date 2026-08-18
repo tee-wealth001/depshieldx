@@ -1,6 +1,6 @@
 import click
 
-from ...receipts import delete_receipts, list_receipts, verify_receipt
+from ...storage.receipts import delete_receipts, list_receipts, verify_receipt
 from ..output import EXIT_BLOCKED, EXIT_OK
 
 

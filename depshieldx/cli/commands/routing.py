@@ -5,8 +5,8 @@ import subprocess
 import click
 
 from ...ecosystems import resolve_cargo_tool, resolve_node_tool
-from ...routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
-from ...runtime import pip_command, self_invoke_command
+from ...core.routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
+from ...core.runtime import pip_command, self_invoke_command
 from ..engine import _show_routing_enabled_message
 
 

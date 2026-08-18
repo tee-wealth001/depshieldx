@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from depshieldx.cargo_lockfiles import parse_cargo_lock
+from depshieldx.ecosystems.cargo.lockfiles import parse_cargo_lock
 
 # Snippets below are trimmed but real -- captured from ripgrep's actual
 # Cargo.lock (https://github.com/BurntSushi/ripgrep/blob/master/Cargo.lock,

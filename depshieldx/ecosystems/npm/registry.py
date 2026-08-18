@@ -48,8 +48,8 @@ from pathlib import Path
 
 import requests
 
-from .cache import get_cache_root
-from .provenance import _is_attestation_infrastructure_error, _run_verification_call
+from ...storage.cache import get_cache_root
+from ...security.provenance import _is_attestation_infrastructure_error, _run_verification_call
 
 NPM_REGISTRY_PACKAGE_URL = "https://registry.npmjs.org/{package}"
 NPM_ATTESTATIONS_URL = "https://registry.npmjs.org/-/npm/v1/attestations/{package}@{version}"

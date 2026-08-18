@@ -50,16 +50,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(command, [sys.executable, "install", "flask"])
 
     def test_resource_path_not_frozen_resolves_relative_to_package(self):
-        path = resource_path("sandbox_wrapper.py")
-        self.assertEqual(path, Path(__file__).resolve().parent.parent / "depshieldx" / "sandbox_wrapper.py")
+        path = resource_path("security/sandbox/sandbox_wrapper.py")
+        self.assertEqual(path, Path(__file__).resolve().parent.parent / "depshieldx" / "security" / "sandbox" / "sandbox_wrapper.py")
         self.assertTrue(path.exists())
 
     @patch("depshieldx.runtime.sys")
     @patch("depshieldx.runtime.is_frozen", return_value=True)
     def test_resource_path_frozen_uses_meipass(self, _mock_frozen, mock_sys):
         mock_sys._MEIPASS = "/frozen/extracted"
-        path = resource_path("sandbox_wrapper.py")
-        self.assertEqual(path, Path("/frozen/extracted") / "sandbox_wrapper.py")
+        path = resource_path("security/sandbox/sandbox_wrapper.py")
+        self.assertEqual(path, Path("/frozen/extracted") / "security" / "sandbox" / "sandbox_wrapper.py")
 
 
 if __name__ == "__main__":

@@ -17,10 +17,10 @@ from urllib.request import url2pathname
 
 import requests
 
-from ..provenance import check_provenance_batch
-from ..resolver import ResolutionResult, resolve_dependencies, resolve_install_inputs
-from ..runtime import pip_command
-from .base import _normalize_pypi_name
+from ...security.provenance import check_provenance_batch
+from ...core.resolver import ResolutionResult, resolve_dependencies, resolve_install_inputs
+from ...core.runtime import pip_command
+from ..base import _normalize_pypi_name
 
 
 class PyPiEcosystem:

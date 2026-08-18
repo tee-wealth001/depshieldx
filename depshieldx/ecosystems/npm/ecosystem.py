@@ -13,10 +13,10 @@ from pathlib import Path
 
 import requests
 
-from ..npm_lockfiles import parse_lockfile, parse_package_lock_json
-from ..npm_registry import check_provenance_batch as npm_check_provenance_batch, fetch_package_metadata
-from ..resolver import ResolutionResult
-from .base import _strip_version_spec
+from .lockfiles import parse_lockfile, parse_package_lock_json
+from .registry import check_provenance_batch as npm_check_provenance_batch, fetch_package_metadata
+from ...core.resolver import ResolutionResult
+from ..base import _strip_version_spec
 
 
 def resolve_node_tool(name: str) -> str:

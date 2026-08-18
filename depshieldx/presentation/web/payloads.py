@@ -4,8 +4,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ...cache import get_cache_root
-from ...receipts import _receipts_root_candidates
+from ...storage.cache import get_cache_root
+from ...storage.receipts import _receipts_root_candidates
 
 
 def _safe_json_load(path: Path) -> dict | None:

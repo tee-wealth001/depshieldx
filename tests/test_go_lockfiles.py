@@ -1,6 +1,6 @@
 import unittest
 
-from depshieldx.go_lockfiles import parse_go_list_module_output
+from depshieldx.ecosystems.go.lockfiles import parse_go_list_module_output
 
 # Real (trimmed) `go list -m -json all` output -- captured from a real
 # scratch module during development (`go mod init` + `go get

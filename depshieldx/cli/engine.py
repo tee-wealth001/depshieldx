@@ -12,16 +12,16 @@ import requests
 
 from ..ecosystems import PYPI_ECOSYSTEM, ecosystem_for_name
 from ..ecosystems.base import _normalize_name_for_ecosystem, _strip_version_spec
-from ..input_sources import load_input_source
-from ..routing import (
+from ..core.input_sources import load_input_source
+from ..core.routing import (
     dismiss_routing_prompt,
     disable_routing as disable_routing_shim,
     enable_routing as enable_routing_shim,
     get_routing_status,
     should_prompt_for_routing,
 )
-from ..sandbox import run_sandbox
-from ..scanner import scan_vulnerabilities
+from ..security.sandbox.runner import run_sandbox
+from ..security.scanner import scan_vulnerabilities
 from .output import (
     _echo_error,
     _echo_success,

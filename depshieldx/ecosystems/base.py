@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from ..resolver import ResolutionResult
+from ..core.resolver import ResolutionResult
 
 
 @dataclass

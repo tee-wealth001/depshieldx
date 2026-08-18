@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 import webbrowser
 
-from ...runtime import resource_path
+from ...core.runtime import resource_path
 from .payloads import build_ui_payload
 
 
