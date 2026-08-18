@@ -4,7 +4,7 @@ import subprocess
 
 import click
 
-from ...ecosystems import resolve_cargo_tool, resolve_node_tool
+from ...ecosystems import resolve_cargo_tool, resolve_go_tool, resolve_node_tool
 from ...core.routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
 from ...core.runtime import pip_command, self_invoke_command
 from ..engine import _show_routing_enabled_message
@@ -183,6 +183,45 @@ def route_cargo(cargo_args):
     raise SystemExit(result.returncode)
 
 
+def _extract_simple_go_get_targets(args):
+    # Mirrors _extract_simple_cargo_add_targets: only intercept a bare
+    # "go get <module...>" with no other flags. depshieldx's Go "install"
+    # support is scoped to `go get` specifically (see Cargo / crates.io
+    # Support's precedent in the README, mirrored for Go) -- `go install`
+    # (binary programs) has no depshieldx equivalent and always passes
+    # through, the same narrow-minority-of-modules carve-out cargo's
+    # binary-crate split is. Since Go 1.18, `go get` never builds or
+    # installs anything itself either way -- only go.mod/go.sum management
+    # (confirmed directly during the Stage 1 research pass).
+    if not args or args[0] != "get":
+        return None
+    targets = [arg for arg in args[1:] if not arg.startswith("-")]
+    if not targets or len(targets) != len(args[1:]):
+        return None
+    return targets
+
+
+@click.argument("go_args", nargs=-1, type=click.UNPROCESSED)
+def route_go(go_args):
+    """Internal helper used by the optional go shim."""
+    args = list(go_args)
+    module_targets = _extract_simple_go_get_targets(args)
+    if module_targets:
+        click.echo("Routing go get through depshieldx...")
+        command = self_invoke_command(["install", *module_targets, "--ecosystem", "go"])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        "depshieldx routing only intercepts a plain 'go get <module...>' with no other flags. "
+        "Passing through to go.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_go_tool("go"), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
 def register(cli):
     cli.add_command(routing)
     cli.command("route-pip", hidden=True, context_settings={"ignore_unknown_options": True})(route_pip)
@@ -190,3 +229,4 @@ def register(cli):
     cli.command("route-yarn", hidden=True, context_settings={"ignore_unknown_options": True})(route_yarn)
     cli.command("route-pnpm", hidden=True, context_settings={"ignore_unknown_options": True})(route_pnpm)
     cli.command("route-cargo", hidden=True, context_settings={"ignore_unknown_options": True})(route_cargo)
+    cli.command("route-go", hidden=True, context_settings={"ignore_unknown_options": True})(route_go)
