@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depshieldx"
-version = "0.2.0"
-description = "Safer package install and scan tool for PyPI and npm/yarn/pnpm, with cryptographic provenance checks, CVE lookups, Docker + Trivy deep mode with behavioral tracing, and signed receipts"
+version = "0.3.0"
+description = "Safer package install and scan tool for PyPI, npm/yarn/pnpm, and Cargo/crates.io, with cryptographic provenance checks (PyPI/npm), CVE lookups, Docker + Trivy deep mode with behavioral tracing, and signed receipts"
 authors = [
     { name="Stephen Toriola", email="stephenola21@gmail.com" }
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11.4"
-keywords = ["security", "pypi", "pip", "npm", "supply-chain", "provenance", "sigstore", "trivy", "receipts"]
+keywords = ["security", "pypi", "pip", "npm", "cargo", "crates.io", "rust", "supply-chain", "provenance", "sigstore", "trivy", "receipts"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
