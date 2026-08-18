@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "depshieldx"
-version = "0.3.0"
+version = "0.3.1"
 description = "Safer package install and scan tool for PyPI, npm/yarn/pnpm, and Cargo/crates.io, with cryptographic provenance checks (PyPI/npm), CVE lookups, Docker + Trivy deep mode with behavioral tracing, and signed receipts"
 authors = [
     { name="Stephen Toriola", email="stephenola21@gmail.com" }
