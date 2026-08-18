@@ -7,11 +7,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import zipfile
+
 from depshieldx.cache import CacheEntry
 from depshieldx.ecosystems.cargo import CARGO_ECOSYSTEM
+from depshieldx.ecosystems.go import GO_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.sandbox import (
     CARGO_SANDBOX_IMAGE_TAG,
+    GO_SANDBOX_IMAGE_TAG,
     NPM_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
@@ -20,6 +24,7 @@ from depshieldx.sandbox import (
     _build_locked_requirements,
     _docker_daemon_available,
     _ensure_cargo_sandbox_image,
+    _ensure_go_sandbox_image,
     _ensure_npm_sandbox_image,
     _extract_report,
     _run_command,
@@ -27,6 +32,7 @@ from depshieldx.sandbox import (
     cleanup_download_bundle,
     prepare_cargo_download_bundle,
     prepare_download_bundle,
+    prepare_go_download_bundle,
     prepare_npm_download_bundle,
     run_sandbox,
 )
@@ -546,6 +552,158 @@ class CargoSandboxTests(unittest.TestCase):
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/cargo-deep/vendor")
         self.assertIn(":/tmp/depshieldx-cargo-unused:rw", " ".join(docker_command))
+
+
+class GoSandboxTests(unittest.TestCase):
+    def _fake_module_zip(self, module: str, version: str) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(f"{module}@{version}/go.mod", f"module {module}\n\ngo 1.21\n")
+            archive.writestr(f"{module}@{version}/errors.go", "package errors\n")
+        return buffer.getvalue()
+
+    @patch("depshieldx.sandbox.fetch_module_zip")
+    @patch("depshieldx.sandbox.fetch_go_mod_text")
+    @patch("depshieldx.sandbox.fetch_version_metadata")
+    def test_prepare_go_download_bundle_builds_local_proxy_and_go_sum(
+        self, mock_fetch_info, mock_fetch_mod, mock_fetch_zip
+    ):
+        module, version = "github.com/pkg/errors", "v0.9.1"
+        mock_fetch_info.return_value = {"Version": version, "Time": "2020-01-14T19:47:44Z"}
+        mock_fetch_mod.return_value = f"module {module}\n\ngo 1.13\n"
+        mock_fetch_zip.return_value = self._fake_module_zip(module, version)
+
+        bundle = prepare_go_download_bundle(GO_ECOSYSTEM, {module: version})
+        try:
+            self.assertIn(f"{module.replace('/', '_')}@{version}.zip", bundle.downloaded_files)
+            self.assertIn("go.mod", bundle.downloaded_files)
+            self.assertIn("go.sum", bundle.downloaded_files)
+
+            go_mod_text = (Path(bundle.temp_dir) / "go.mod").read_text()
+            self.assertIn(f"require {module} {version}", go_mod_text)
+
+            go_sum_text = (Path(bundle.temp_dir) / "go.sum").read_text()
+            self.assertIn(f"{module} {version} h1:", go_sum_text)
+            self.assertIn(f"{module} {version}/go.mod h1:", go_sum_text)
+
+            # Local file-based GOPROXY layout -- uppercase letters in the
+            # module path must be "!"-escaped the same way the real network
+            # proxy requires (confirmed directly for the network path;
+            # both share the same underlying module-fetcher code).
+            proxy_dir = Path(bundle.temp_dir) / "goproxy" / module / "@v"
+            self.assertTrue((proxy_dir / f"{version}.info").exists())
+            self.assertTrue((proxy_dir / f"{version}.mod").exists())
+            self.assertTrue((proxy_dir / f"{version}.zip").exists())
+            self.assertEqual((proxy_dir / "list").read_text().strip(), version)
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox.fetch_module_zip")
+    @patch("depshieldx.sandbox.fetch_go_mod_text")
+    @patch("depshieldx.sandbox.fetch_version_metadata")
+    def test_prepare_go_download_bundle_escapes_uppercase_module_path(
+        self, mock_fetch_info, mock_fetch_mod, mock_fetch_zip
+    ):
+        module, version = "github.com/Masterminds/semver", "v1.5.0"
+        mock_fetch_info.return_value = {"Version": version}
+        mock_fetch_mod.return_value = f"module {module}\n\ngo 1.13\n"
+        mock_fetch_zip.return_value = self._fake_module_zip(module, version)
+
+        bundle = prepare_go_download_bundle(GO_ECOSYSTEM, {module: version})
+        try:
+            escaped_dir = Path(bundle.temp_dir) / "goproxy" / "github.com" / "!masterminds" / "semver" / "@v"
+            self.assertTrue((escaped_dir / f"{version}.info").exists())
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_go_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_go_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_go_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_go_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(GO_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("go_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_go_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_go_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_go_image_and_go_wrapper_for_go_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/go-deep",
+            downloaded_files=["github.com_pkg_errors@v0.9.1.zip", "go.mod", "go.sum"],
+            artifact_hashes={"github.com_pkg_errors@v0.9.1.zip": "abc"},
+            requirements_path="/tmp/go-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"download_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"github.com/pkg/errors": "v0.9.1"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=GO_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(GO_ECOSYSTEM, {"github.com/pkg/errors": "v0.9.1"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(GO_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_go.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("github.com/pkg/errors@v0.9.1", docker_command)
+        self.assertIn(
+            "/tmp/depshieldx-go-work:rw,nosuid,nodev,exec,size=128m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for Go -- go.mod/
+        # go.sum were already built host-side, so Trivy scans the bundle
+        # directory directly instead of the (unused, empty) bind-mounted
+        # install dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/go-deep")
+        self.assertIn(":/tmp/depshieldx-go-unused:rw", " ".join(docker_command))
 
 
 class EvidenceCollectorTests(unittest.TestCase):

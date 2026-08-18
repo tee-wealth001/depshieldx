@@ -308,6 +308,38 @@ class ArtifactAnalysisTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertEqual(result["finding_count"], 0)
 
+    def test_plain_go_file_network_call_is_not_flagged_as_install_script(self):
+        # Go module zips are plain zip archives (confirmed directly) -- the
+        # existing .whl/.zip branch already opens and scans them, no
+        # Go-specific extraction code needed, only ".go" in
+        # TEXT_EXTENSIONS -- so this .go file is a real _scan_text()
+        # candidate, exercised via the generic zip handler.
+        #
+        # Go also has no canonical, always-executed build-time script the
+        # way build.rs/setup.py are (confirmed directly: init() functions
+        # and //go:generate directives only run during a real `go build`/
+        # `go generate`, not during `go mod download` alone, and neither is
+        # a single agreed-upon filename) -- so, unlike cargo's build.rs, no
+        # .go filename gets the install-script-only subprocess/network
+        # severity escalation, and none of PATTERN_RULES' few non-
+        # install-only entries (payload_obfuscation, sensitive_env_access)
+        # recognize Go syntax either (they're hardcoded to Python's
+        # os.environ/getenv and Rust's env::var idioms) -- confirmed
+        # directly nothing in real Go source currently trips any rule here.
+        # Mirrors the plain-.js-file/plain-.rs-file cases above exactly.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "github.com_pkg_example@v1.0.0.zip"
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr(
+                    "github.com/pkg/example@v1.0.0/main.go",
+                    'package main\n\nimport "net/http"\n\nfunc fetch() {\n\thttp.Get("https://example.com")\n}\n',
+                )
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["finding_count"], 0)
+
     def test_pe_extension_with_embedded_second_pe_and_exec_indicators_still_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = Path(temp_dir) / "pkg-0.1.0.whl"

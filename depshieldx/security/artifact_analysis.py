@@ -18,8 +18,15 @@ MAX_BINARY_SCAN_BYTES = 1_048_576
 # particular), and build.rs is cargo's own "install_only" analogue -- a
 # script name every crate agrees on, always executed automatically at build
 # time before the crate itself compiles, unlike arbitrary .rs source files a
-# user would have to explicitly depend on.
-TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs"}
+# user would have to explicitly depend on. ".go" covers Go module source --
+# Go module zips are plain zip archives (confirmed directly), so the
+# existing .zip branch below already opens and scans them, no new archive-
+# format code needed. Deliberately no Go entry in INSTALL_SCRIPT_NAMES:
+# unlike setup.py/build.rs, Go has no canonical, always-executed
+# build-time script -- init() functions and //go:generate directives only
+# run during a real `go build`/`go generate`, not during `go mod download`
+# alone, and neither is a single agreed-upon filename the way build.rs is.
+TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs", ".go"}
 INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json", "build.rs"}
 NATIVE_BINARY_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
 ASCII_STRING_PATTERN = re.compile(rb"[\x20-\x7e]{6,}")
