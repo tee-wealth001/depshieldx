@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from depshieldx.cache import CacheEntry
+from depshieldx.ecosystems.cargo import CARGO_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.sandbox import (
+    CARGO_SANDBOX_IMAGE_TAG,
     NPM_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
@@ -17,11 +19,13 @@ from depshieldx.sandbox import (
     TEXT_SUBPROCESS_KWARGS,
     _build_locked_requirements,
     _docker_daemon_available,
+    _ensure_cargo_sandbox_image,
     _ensure_npm_sandbox_image,
     _extract_report,
     _run_command,
     _sandbox_cache_fingerprint,
     cleanup_download_bundle,
+    prepare_cargo_download_bundle,
     prepare_download_bundle,
     prepare_npm_download_bundle,
     run_sandbox,
@@ -412,6 +416,136 @@ class NpmSandboxTests(unittest.TestCase):
             f"{host_install_dir}:/tmp/depshieldx-npm-install:rw",
             docker_command,
         )
+
+
+class CargoSandboxTests(unittest.TestCase):
+    def test_prepare_cargo_download_bundle_vendors_and_hashes_crates(self):
+        fake_ecosystem = unittest.mock.Mock()
+        fake_ecosystem.selected_artifact_entries.return_value = [
+            ("serde", "1.0.219", {"url": "https://static.crates.io/crates/serde/serde-1.0.219.crate"}),
+        ]
+
+        def fake_fetch(_artifact, destination):
+            target = Path(destination) / "serde-1.0.219.crate"
+            with tarfile.open(target, "w:gz") as archive:
+                # Real .crate tarballs nest everything under one top-level
+                # "<name>-<version>/" directory -- reproduced here so the
+                # flattening logic in prepare_cargo_download_bundle is
+                # actually exercised, not just assumed to run.
+                info = tarfile.TarInfo(name="serde-1.0.219/src/lib.rs")
+                data = b"// serde\n"
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+            return target
+
+        fake_ecosystem.fetch_artifact.side_effect = fake_fetch
+
+        bundle = prepare_cargo_download_bundle(fake_ecosystem, {"serde": "1.0.219"})
+        try:
+            self.assertIn("serde-1.0.219.crate", bundle.downloaded_files)
+            self.assertIn("serde-1.0.219.crate", bundle.artifact_hashes)
+            self.assertIn("serde@1.0.219", Path(bundle.requirements_path).read_text())
+
+            vendor_entry = Path(bundle.temp_dir) / "vendor" / "serde-1.0.219"
+            # Flattened: src/lib.rs directly under the vendor entry, not
+            # double-nested under another serde-1.0.219/ directory.
+            self.assertTrue((vendor_entry / "src" / "lib.rs").exists())
+            self.assertTrue((vendor_entry / ".cargo-checksum.json").exists())
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_cargo_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_cargo_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_cargo_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_cargo_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(CARGO_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("cargo_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_cargo_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_cargo_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_rust_image_and_cargo_wrapper_for_cargo_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/cargo-deep",
+            downloaded_files=["serde-1.0.219.crate"],
+            artifact_hashes={"serde-1.0.219.crate": "abc"},
+            requirements_path="/tmp/cargo-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"build_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"serde": "1.0.219"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=CARGO_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(CARGO_ECOSYSTEM, {"serde": "1.0.219"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(CARGO_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_cargo.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("serde@=1.0.219", docker_command)
+        self.assertIn("/tmp/packages/vendor", docker_command)
+        # A real `cargo build` needs to execute what it just compiled out of
+        # its own scratch project's target/ dir -- confirmed directly this
+        # fails under the shared noexec /tmp, so the whole scratch project
+        # dir gets its own exec-permitted tmpfs layered on top.
+        self.assertIn(
+            "/tmp/depshieldx-cargo-install:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for cargo -- the
+        # vendor directory was already built host-side, so Trivy scans it
+        # directly instead of the (unused, empty) bind-mounted install dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/cargo-deep/vendor")
+        self.assertIn(":/tmp/depshieldx-cargo-unused:rw", " ".join(docker_command))
 
 
 class EvidenceCollectorTests(unittest.TestCase):

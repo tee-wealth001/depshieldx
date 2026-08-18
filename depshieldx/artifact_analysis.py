@@ -9,13 +9,18 @@ from typing import Iterable, List
 MAX_SCAN_BYTES = 512_000
 MAX_BINARY_SCAN_BYTES = 1_048_576
 # .tgz/.tar archives are already handled generically below (npm tarballs use
-# the same tar+gzip format sdists do) -- these two sets are what actually
-# gate per-file scanning, and were PyPI-only until npm deep mode needed them
-# too: .js/.mjs/.cjs/.ts/.json cover npm package source and manifests, and
-# package.json is npm's "install_only" analogue to setup.py -- where a
-# postinstall/preinstall script command would appear as plain text.
-TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json"}
-INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json"}
+# the same tar+gzip format sdists do; .crate files -- crates.io's own
+# artifact format -- are confirmed to be plain gzipped tarballs too, same
+# handling) -- these two sets are what actually gate per-file scanning, and
+# were PyPI-only until npm deep mode needed them too: .js/.mjs/.cjs/.ts/.json
+# cover npm package source and manifests, package.json is npm's
+# "install_only" analogue to setup.py, .rs covers Rust source (build.rs in
+# particular), and build.rs is cargo's own "install_only" analogue -- a
+# script name every crate agrees on, always executed automatically at build
+# time before the crate itself compiles, unlike arbitrary .rs source files a
+# user would have to explicitly depend on.
+TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs"}
+INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json", "build.rs"}
 NATIVE_BINARY_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
 ASCII_STRING_PATTERN = re.compile(rb"[\x20-\x7e]{6,}")
 URL_PATTERN = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{6,}")
@@ -122,6 +127,12 @@ SENSITIVE_ENV_ACCESS_PATTERN = re.compile(
             ["']
         \s*\)
         |
+        env::var\(
+            \s*["']
+            (AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|GITHUB_TOKEN|PYPI_TOKEN|NPM_TOKEN|API_KEY|PRIVATE_KEY|BEARER_TOKEN)
+            ["']
+        \s*\)
+        |
         process\.env(?:\.|\[["']?)
             (AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|GITHUB_TOKEN|PYPI_TOKEN|NPM_TOKEN|API_KEY|PRIVATE_KEY|BEARER_TOKEN)
             ["']?\]?
@@ -176,6 +187,36 @@ PATTERN_RULES = (
         "pattern": re.compile(r"require\s*\(\s*['\"]child_process['\"]\s*\)|\b(exec|execSync|spawn|spawnSync)\s*\("),
         "install_only": True,
         "message": "Install script launches shell or subprocess commands.",
+    },
+    {
+        # No Rust equivalent of "install_exec_eval" -- Rust is compiled, not
+        # dynamically interpreted, so there's no eval()/exec() analogue for
+        # build.rs to abuse the way Python/JS install scripts can.
+        "code": "install_network_access_rust",
+        "severity": "high",
+        "pattern": re.compile(r"\b(TcpStream::connect|reqwest::|ureq::|curl::easy::)"),
+        "install_only": True,
+        "message": "Install script appears to perform network access.",
+    },
+    {
+        # Narrower than the Python/JS subprocess rules: `Command::new(...)`
+        # by itself is far too common in legitimate build.rs scripts to
+        # flag generically -- confirmed directly against the real, benign
+        # serde build.rs, which shells out to `Command::new(rustc).arg(
+        # "--version")` to feature-gate on the compiler version (the exact
+        # same widely-used idiom sandbox_wrapper.py's own
+        # ALLOWED_SUBPROCESS_PREFIXES already allowlists as benign for
+        # PyPI/npm). Only flag when the command target itself is a shell,
+        # network-fetch tool, or another scripting interpreter -- the same
+        # class of literal command names SHELL_SNIPPET_PATTERNS already
+        # treats as suspicious for compiled binaries above.
+        "code": "install_subprocess_rust",
+        "severity": "high",
+        "pattern": re.compile(
+            r'Command::new\s*\(\s*"(?:/bin/)?(?:sh|bash|zsh|cmd(?:\.exe)?|powershell(?:\.exe)?|curl|wget|nc|ncat|python[23]?|perl|ruby)"'
+        ),
+        "install_only": True,
+        "message": "Install script launches a shell or network-fetch subprocess.",
     },
     {
         "code": "payload_obfuscation",
@@ -497,7 +538,7 @@ def analyze_artifact(artifact_path: Path) -> List[StaticFinding]:
                     findings.extend(_scan_text(artifact_path.name, member_name, text))
         return findings
 
-    if suffixes[-2:] == [".tar", ".gz"] or artifact_path.suffix in {".tgz", ".tar"}:
+    if suffixes[-2:] == [".tar", ".gz"] or artifact_path.suffix in {".tgz", ".tar", ".crate"}:
         mode = "r:gz" if artifact_path.suffix != ".tar" else "r:"
         with tarfile.open(artifact_path, mode) as archive:
             member_names = [member.name for member in archive.getmembers() if member.isfile()]
