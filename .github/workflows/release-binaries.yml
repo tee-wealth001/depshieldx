@@ -10,6 +10,18 @@ jobs:
   build:
     name: Build (${{ matrix.artifact }})
     runs-on: ${{ matrix.os }}
+    # Real bug, not a capacity fluke: the matrix used to target "macos-13",
+    # which actionlint's real current runner-label list confirms no longer
+    # exists in GitHub's hosted fleet at all -- a job requesting it can never
+    # be picked up, so it sits queued until GitHub's 24h hard workflow-run
+    # cap force-cancels the whole run. Observed directly across 3 consecutive
+    # real runs before being diagnosed. Fixed by targeting "macos-15-intel"
+    # (still a real Intel Mac runner) below. timeout-minutes still added as
+    # defense in depth -- it counts queued time, not just execution time, so
+    # any future case of a runner label going stale again fails within an
+    # hour instead of eating 24h; every platform's real build time observed
+    # is under 3 minutes, so 60 minutes is generous headroom either way.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -17,7 +29,7 @@ jobs:
           - os: windows-latest
             artifact: depshieldx-windows-x64.exe
             built-name: depshieldx.exe
-          - os: macos-13
+          - os: macos-15-intel
             artifact: depshieldx-macos-x64
             built-name: depshieldx
           - os: macos-latest
@@ -58,7 +70,15 @@ jobs:
   release:
     name: Attach binaries to GitHub Release
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # always() so one flaky platform (see the build job's timeout-minutes
+    # comment) can never block the other platforms' binaries from being
+    # attached -- `needs:` alone would skip this job entirely if even one
+    # matrix entry failed or was cancelled, which is exactly what happened
+    # to v0.2.0's release: 3 of 4 platforms built fine, but the whole
+    # release was silently skipped because macos-x64 didn't. Re-checks the
+    # original trigger condition explicitly since always() bypasses the
+    # default "needs succeeded" gate entirely, not just failure states.
+    if: always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -72,6 +92,14 @@ jobs:
           path: dist/
           merge-multiple: true
 
+      - name: Fail clearly if every platform failed
+        run: |
+          if [ -z "$(ls -A dist/ 2>/dev/null)" ]; then
+            echo "::error::No platform build succeeded -- nothing to release." >&2
+            exit 1
+          fi
+          ls -la dist/
+
       - name: Create or update the GitHub Release for this tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,5 +107,5 @@ jobs:
           gh release create "${{ github.ref_name }}" dist/* \
             --title "${{ github.ref_name }}" \
             --generate-notes \
-            --notes "Standalone binaries for this release. \`pip install depshieldx\` still works and gets the same version." \
+            --notes "Standalone binaries for this release. \`pip install depshieldx\` still works and gets the same version. If a platform's binary is missing here, that platform's build didn't complete this run -- re-run the Release Binaries workflow to retry it." \
             || gh release upload "${{ github.ref_name }}" dist/* --clobber
