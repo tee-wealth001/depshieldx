@@ -133,23 +133,26 @@ def _uninstall_args_for_input_source(input_source, ecosystem):
     if input_source.source_type == "requirements":
         return input_source.pip_args[:]
 
-    if input_source.source_type == "lockfile" and ecosystem.name in ("npm", "cargo"):
-        # npm/yarn/pnpm and Cargo lockfiles pass their raw path through as
-        # the sole requested target (both ecosystems' resolve() parse the
-        # lockfile directly) -- unlike uv.lock, which is pre-parsed into
-        # name==version strings by input_sources.py, so this only applies to
-        # ecosystems whose own adapter reads the lockfile itself.
+    if input_source.source_type == "lockfile" and ecosystem.name in ("npm", "cargo", "go"):
+        # npm/yarn/pnpm, Cargo, and go.sum lockfiles pass their raw path
+        # through as the sole requested target (each ecosystem's resolve()
+        # reads the lockfile/its sibling manifest directly) -- unlike
+        # uv.lock, which is pre-parsed into name==version strings by
+        # input_sources.py, so this only applies to ecosystems whose own
+        # adapter reads the lockfile itself.
         return ecosystem.direct_dependency_names_for_lockfile(input_source.requested_targets[0])
 
     package_names = []
     seen = set()
     for target in input_source.requested_targets:
-        if ecosystem.name in ("npm", "cargo"):
+        if ecosystem.name in ("npm", "cargo", "go"):
             # _package_name_from_requirement is PyPI-shaped (name==version,
             # name[extra]) and actively rejects anything containing "/",
             # which would break scoped npm packages like "@babel/core" --
-            # npm's/cargo's own "name@version" stripping already exists in
-            # ecosystems/base.py and handles this correctly per ecosystem.
+            # and every Go module path (e.g. "github.com/pkg/errors").
+            # npm's/cargo's/go's own "name@version" stripping already
+            # exists in ecosystems/base.py and handles this correctly per
+            # ecosystem.
             package_name = _strip_version_spec(target, ecosystem.name).strip()
         else:
             package_name = _package_name_from_requirement(target) or target.strip()

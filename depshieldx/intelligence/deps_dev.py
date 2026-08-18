@@ -18,6 +18,7 @@ DEPS_DEV_SYSTEM_NAMES = {
     "pypi": "pypi",
     "npm": "npm",
     "cargo": "cargo",
+    "go": "go",
 }
 
 

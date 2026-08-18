@@ -42,6 +42,15 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
     # so it gets the same folding as PyPI.
     if ecosystem in ("pypi", "cargo"):
         return _normalize_pypi_name(name)
+    if ecosystem == "go":
+        # Go module paths are case-sensitive canonical identifiers
+        # (confirmed directly against go.dev/ref/mod's module-path rules)
+        # -- unlike every other ecosystem here, lowercasing would fold
+        # together genuinely different modules and would silently break
+        # matching against external vulnerability sources, which document
+        # their Go package-name field as the exact module path (see
+        # go_registry.py's module docstring). Only whitespace is trimmed.
+        return name.strip() if name else ""
     return name.strip().lower() if name else ""
 
 
@@ -56,9 +65,10 @@ def _strip_version_spec(target: str, ecosystem: str) -> str:
         search_from = 1 if target.startswith("@") else 0
         at_index = target.find("@", search_from)
         return target[:at_index] if at_index != -1 else target
-    if ecosystem == "cargo":
-        # "serde@=1.0.219" -> "serde"; crate names have no scoping prefix
-        # to skip past, unlike npm's "@scope/name".
+    if ecosystem in ("cargo", "go"):
+        # "serde@=1.0.219" -> "serde"; "github.com/pkg/errors@v0.9.1" ->
+        # "github.com/pkg/errors" -- crate/module names have no scoping
+        # prefix to skip past, unlike npm's "@scope/name".
         at_index = target.find("@")
         return target[:at_index] if at_index != -1 else target
     return target
@@ -79,7 +89,7 @@ def package_records(ecosystem: str, resolution: ResolutionResult) -> list[Packag
                 ecosystem=ecosystem,
                 name=name,
                 version=version,
-                source={"pypi": "pypi.org", "npm": "npmjs.org", "cargo": "crates.io"}.get(ecosystem),
+                source={"pypi": "pypi.org", "npm": "npmjs.org", "cargo": "crates.io", "go": "pkg.go.dev"}.get(ecosystem),
                 purl=f"pkg:{ecosystem}/{name}@{version}" if version else None,
                 digest=digest,
                 direct=_normalize_name_for_ecosystem(name, ecosystem) in direct_names,

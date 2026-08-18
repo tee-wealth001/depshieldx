@@ -11,7 +11,7 @@ from ..output import _echo_success, _stage_loader
 @click.option(
     "--ecosystem",
     "ecosystem_option",
-    type=click.Choice(["pypi", "npm", "cargo"], case_sensitive=False),
+    type=click.Choice(["pypi", "npm", "cargo", "go"], case_sensitive=False),
     default=None,
     help="Ecosystem for bare package-name targets (ignored for --lockfile, which is auto-detected by filename). Defaults to pypi.",
 )

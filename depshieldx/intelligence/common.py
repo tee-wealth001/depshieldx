@@ -50,7 +50,15 @@ def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
     """PyPI treats "-"/"_" as equivalent (PEP 503) so those are folded together for
     matching. Other ecosystems don't share that convention -- npm package names are
     hyphen-significant ("left-pad" is not the same as "left_pad") -- so only PyPI gets
-    the substitution."""
+    the substitution.
+
+    Go module paths are case-sensitive canonical identifiers (confirmed directly
+    against go.dev/ref/mod's module-path rules), unlike every other ecosystem here --
+    lowercasing would fold together genuinely different modules and silently break
+    matching against OSV/deps.dev/GitHub Advisories, which key Go entries by the exact
+    module path. Only whitespace is trimmed."""
+    if ecosystem == "go":
+        return name.strip()
     normalized = name.strip().lower()
     if ecosystem == "pypi":
         return normalized.replace("-", "_")

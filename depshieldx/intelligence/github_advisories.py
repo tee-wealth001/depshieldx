@@ -18,6 +18,7 @@ GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
     "pypi": "pip",
     "npm": "npm",
     "cargo": "rust",
+    "go": "go",
 }
 
 

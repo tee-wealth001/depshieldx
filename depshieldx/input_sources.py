@@ -4,6 +4,7 @@ import tomllib
 
 NPM_LOCKFILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
 CARGO_LOCKFILE_NAMES = {"Cargo.lock"}
+GO_LOCKFILE_NAMES = {"go.sum"}
 
 
 @dataclass
@@ -101,6 +102,18 @@ def load_input_source(
                 requested_targets=[lockfile],
                 pip_args=[],
                 ecosystem="cargo",
+            )
+        if lockfile_name in GO_LOCKFILE_NAMES:
+            # Same reasoning as the npm/cargo branches above -- GoEcosystem.resolve()
+            # reads the resolved module graph itself (via the sibling go.mod, not
+            # go.sum's raw text -- see go_lockfiles.py's module docstring for why
+            # go.sum alone isn't the resolved graph).
+            return InputSource(
+                source_type="lockfile",
+                label=lockfile_name,
+                requested_targets=[lockfile],
+                pip_args=[],
+                ecosystem="go",
             )
         if lockfile_name == "uv.lock":
             requested_targets = _parse_uv_lock(lockfile)
