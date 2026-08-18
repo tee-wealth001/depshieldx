@@ -107,6 +107,56 @@ def _cargo_satisfies(version: str, spec: str) -> bool:
     return all(_cargo_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+def _strip_go_version_prefix(version: str) -> str:
+    return version[1:] if version[:1] in ("v", "V") else version
+
+
+def _go_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using real
+    SemVer 2.0.0 ordering -- Go module versions are semver (confirmed
+    directly against go.dev/ref/mod), just written with a leading "v"
+    ("v1.2.3") that semver.Version.parse() rejects, so it's stripped from
+    both sides first. Confirmed directly against real OSV Go advisory data
+    (golang.org/x/crypto's GHSA-3vm4-22fp-5rfm): OSV's own `introduced`/
+    `fixed` boundary values for the Go ecosystem have no "v" prefix at all
+    (e.g. "fixed": "0.0.0-20201216223049-8b5274cf687f"), unlike the
+    resolved versions depshieldx compares them against -- both sides are
+    normalized the same way here so the mismatched convention doesn't
+    matter. A bare boundary like OSV's "introduced": "0" isn't valid
+    SemVer either way and simply fails to parse -- that one clause is
+    skipped (mirrors the cargo branch's identical accepted failure mode
+    for any unparseable boundary), not treated as a crash.
+    """
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    try:
+        current = semver.Version.parse(_strip_go_version_prefix(version))
+        target = semver.Version.parse(_strip_go_version_prefix(boundary))
+    except ValueError:
+        return False
+
+    if operator == ">=":
+        return current >= target
+    if operator == "<=":
+        return current <= target
+    if operator == ">":
+        return current > target
+    if operator == "<":
+        return current < target
+    return current == target
+
+
+def _go_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_go_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -150,6 +200,9 @@ class VersionVulnerability:
 
         if ecosystem == "cargo":
             return self._is_current_version_vulnerable_cargo(version)
+
+        if ecosystem == "go":
+            return self._is_current_version_vulnerable_go(version)
 
         try:
             check_version = Version(version)
@@ -212,6 +265,28 @@ class VersionVulnerability:
         if self.fixed_in_version:
             try:
                 if current_version < semver.Version.parse(self.fixed_in_version):
+                    return True
+            except ValueError:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_go(self, version: str) -> bool:
+        try:
+            current_version = semver.Version.parse(_strip_go_version_prefix(version))
+        except ValueError:
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the PyPI/npm/cargo branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _go_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                if current_version < semver.Version.parse(_strip_go_version_prefix(self.fixed_in_version)):
                     return True
             except ValueError:
                 pass

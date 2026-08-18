@@ -298,16 +298,23 @@ def _project_url(ecosystem: str, package_name: str, package_version: str) -> str
     # Fixed for all three ecosystems in the same pass. URL formats confirmed
     # directly (npmjs.com's /package/{name}/v/{version} and crates.io's
     # /crates/{name}/{version} both verified to resolve with a real HTTP
-    # request, not guessed).
+    # request, not guessed). pkg.go.dev's /{module}@{version} form added
+    # later, confirmed directly the same way.
     if ecosystem == "npm":
         return f"https://www.npmjs.com/package/{quote(package_name)}/v/{quote(package_version)}"
     if ecosystem == "cargo":
         return f"https://crates.io/crates/{quote(package_name)}/{quote(package_version)}"
+    if ecosystem == "go":
+        # Go module paths are meaningful, unescaped URL path segments on
+        # pkg.go.dev (e.g. "github.com/pkg/errors@v0.9.1") -- quote()'s
+        # default safe="/" leaves the slashes intact while still encoding
+        # anything that needs it.
+        return f"https://pkg.go.dev/{quote(package_name)}@{quote(package_version)}"
     return f"https://pypi.org/project/{quote(package_name)}/{quote(package_version)}/"
 
 
 def _install_target_label(ecosystem: str, package_name: str, package_version: str) -> str:
-    if ecosystem in ("npm", "cargo"):
+    if ecosystem in ("npm", "cargo", "go"):
         return f"{package_name}@{package_version}"
     return f"{package_name}=={package_version}"
 
