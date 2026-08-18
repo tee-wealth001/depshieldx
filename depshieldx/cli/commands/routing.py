@@ -4,7 +4,7 @@ import subprocess
 
 import click
 
-from ...ecosystems import resolve_node_tool
+from ...ecosystems import resolve_cargo_tool, resolve_node_tool
 from ...routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
 from ...runtime import pip_command, self_invoke_command
 from ..engine import _show_routing_enabled_message
@@ -148,9 +148,45 @@ def route_pnpm(manager_args):
     _route_npm_family("pnpm", list(manager_args))
 
 
+def _extract_simple_cargo_add_targets(args):
+    # Mirrors _extract_simple_npm_family_install_targets: only intercept a
+    # bare "cargo add <crate...>" with no other flags. depshieldx's cargo
+    # "install" support is scoped to `cargo add` specifically (see
+    # Cargo / crates.io Support in the README) -- `cargo install` (binary
+    # crates) has no depshieldx equivalent and always passes through.
+    if not args or args[0] != "add":
+        return None
+    targets = [arg for arg in args[1:] if not arg.startswith("-")]
+    if not targets or len(targets) != len(args[1:]):
+        return None
+    return targets
+
+
+@click.argument("cargo_args", nargs=-1, type=click.UNPROCESSED)
+def route_cargo(cargo_args):
+    """Internal helper used by the optional cargo shim."""
+    args = list(cargo_args)
+    crate_targets = _extract_simple_cargo_add_targets(args)
+    if crate_targets:
+        click.echo("Routing cargo add through depshieldx...")
+        command = self_invoke_command(["install", *crate_targets, "--ecosystem", "cargo"])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        "depshieldx routing only intercepts a plain 'cargo add <crate...>' with no other flags. "
+        "Passing through to cargo.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_cargo_tool("cargo"), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
 def register(cli):
     cli.add_command(routing)
     cli.command("route-pip", hidden=True, context_settings={"ignore_unknown_options": True})(route_pip)
     cli.command("route-npm", hidden=True, context_settings={"ignore_unknown_options": True})(route_npm)
     cli.command("route-yarn", hidden=True, context_settings={"ignore_unknown_options": True})(route_yarn)
     cli.command("route-pnpm", hidden=True, context_settings={"ignore_unknown_options": True})(route_pnpm)
+    cli.command("route-cargo", hidden=True, context_settings={"ignore_unknown_options": True})(route_cargo)

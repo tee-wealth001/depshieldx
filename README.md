@@ -219,6 +219,8 @@ depshieldx install serde tokio --ecosystem cargo
 
 Bare crate-name resolution shells out to the real `cargo add` CLI against a scratch package in an isolated temp directory to compute the full, accurate resolved dependency set, then checks that whole resolved set before installing.
 
+If you have the [routing shim](#routing) enabled, `cargo add <crate>` is also intercepted automatically and routed through `depshieldx install <crate> --ecosystem cargo` -- you don't need to change your muscle memory.
+
 "Install" here means `cargo add` -- adding the crate(s) to your project's `Cargo.toml`/`Cargo.lock` -- not `cargo install` (installing a binary crate). `depshieldx` does not currently support installing binary crates.
 
 `--deep` is supported for Cargo the same way it is for PyPI and npm: the resolved crate set is fetched into a sandboxed container (`rust:1-slim` + `strace`) and scanned with Trivy, and the sandboxed `cargo build --offline` is traced with `strace` for filesystem, process, and network activity -- see [Modes](#modes) for details. `depshieldx uninstall` is also supported, via `cargo remove`.
@@ -535,7 +537,7 @@ Receipts include package-level details such as:
 
 ## Routing
 
-`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, and `pnpm install` commands go through `depshieldx`.
+`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, and `cargo add <crate>` commands go through `depshieldx`.
 
 ```bash
 depshieldx routing status
@@ -545,8 +547,8 @@ depshieldx routing disable
 
 Routing is platform-aware:
 
-- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`)
-- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`)
+- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`)
+- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`)
 
 What each shim intercepts:
 
@@ -554,6 +556,7 @@ What each shim intercepts:
 - `npm install` / `npm i` / `npm ci` / `yarn install` / `pnpm install` with no package named -- routed through `depshieldx install --lockfile <lockfile-in-cwd>`, only when that lockfile is present
 - `npm install <package...>` / `npm i <package...>` -- one or more package names with no other flags, routed through `depshieldx install <package...> --ecosystem npm`
 - `yarn add <package>` / `pnpm add <package>` are **not** intercepted yet -- ad-hoc resolution in this phase only covers `npm install <package>`, so yarn/pnpm named installs pass straight through to the real tool
+- `cargo add <crate...>` -- one or more crate names with no other flags, routed through `depshieldx install <crate...> --ecosystem cargo`. `cargo install` (binary crates) is not intercepted -- depshieldx's cargo support only covers `cargo add`
 
 Anything else (flags mixed in with a package name, other subcommands like `run`, global installs) passes straight through to the real tool untouched.
 
