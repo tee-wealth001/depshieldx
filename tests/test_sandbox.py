@@ -692,7 +692,7 @@ class GoSandboxTests(unittest.TestCase):
         self.assertIn("python3", docker_command)
         self.assertIn("github.com/pkg/errors@v0.9.1", docker_command)
         self.assertIn(
-            "/tmp/depshieldx-go-work:rw,nosuid,nodev,exec,size=128m",
+            "/tmp/depshieldx-go-work:rw,nosuid,nodev,exec,size=256m",
             docker_command,
         )
 

@@ -913,14 +913,19 @@ def run_sandbox(
                 scan_base_dir = bundle.temp_dir
                 # sandbox_wrapper_go.py copies go.mod/go.sum into its own
                 # writable work directory and points $GOPATH/$GOCACHE
-                # there too (confirmed directly `go mod download` needs
-                # writable locations for its own bookkeeping, unlike
-                # cargo's directory-source fetch) -- needs its own
-                # exec-permitted tmpfs for the same auto-created-root-
-                # owned-parent reasoning as npm's/cargo's mounts above.
+                # there too (confirmed directly `go mod download`/`go
+                # build` need writable locations for their own
+                # bookkeeping and compiled-package cache, unlike cargo's
+                # directory-source fetch) -- needs its own exec-permitted
+                # tmpfs for the same auto-created-root-owned-parent
+                # reasoning as npm's/cargo's mounts above. 256m, matching
+                # cargo's own build-stage size -- a real `go build`
+                # populates $GOCACHE with compiled package objects, not
+                # just fetched module sources the way Stage 2's plain
+                # `go mod download` did.
                 extra_tmpfs_args = [
                     "--tmpfs",
-                    "/tmp/depshieldx-go-work:rw,nosuid,nodev,exec,size=128m",
+                    "/tmp/depshieldx-go-work:rw,nosuid,nodev,exec,size=256m",
                 ]
                 env_args = ["-e", "HOME=/tmp"]
                 _ensure_go_sandbox_image(verbose=verbose)
