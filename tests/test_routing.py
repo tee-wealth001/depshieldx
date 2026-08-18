@@ -101,6 +101,17 @@ class RoutingTests(unittest.TestCase):
                     self.assertTrue(cargo_shim.exists())
                     self.assertEqual(cargo_shim.read_text(), '#!/bin/sh\nexec depshieldx route-cargo "$@"\n')
 
+    def test_enable_routing_also_writes_go_shim(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": temp_dir}, clear=False):
+                with patch("depshieldx.routing._is_windows", return_value=False):
+                    status = enable_routing()
+                    shim_dir = Path(status["shim_path"]).parent
+
+                    go_shim = shim_dir / "go"
+                    self.assertTrue(go_shim.exists())
+                    self.assertEqual(go_shim.read_text(), '#!/bin/sh\nexec depshieldx route-go "$@"\n')
+
     def test_disable_routing_removes_npm_family_shims_too(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": temp_dir}, clear=False):
@@ -110,7 +121,7 @@ class RoutingTests(unittest.TestCase):
 
                     disable_routing()
 
-                    for tool in ("pip", "npm", "yarn", "pnpm", "cargo"):
+                    for tool in ("pip", "npm", "yarn", "pnpm", "cargo", "go"):
                         self.assertFalse((shim_dir / tool).exists(), f"{tool} shim should have been removed")
 
 

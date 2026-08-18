@@ -537,7 +537,7 @@ Receipts include package-level details such as:
 
 ## Routing
 
-`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, and `cargo add <crate>` commands go through `depshieldx`.
+`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, `cargo add <crate>`, and `go get <module>` commands go through `depshieldx`.
 
 ```bash
 depshieldx routing status
@@ -547,8 +547,8 @@ depshieldx routing disable
 
 Routing is platform-aware:
 
-- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`)
-- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`)
+- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`, `go`)
+- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`, `go.bat`)
 
 What each shim intercepts:
 
@@ -557,6 +557,7 @@ What each shim intercepts:
 - `npm install <package...>` / `npm i <package...>` -- one or more package names with no other flags, routed through `depshieldx install <package...> --ecosystem npm`
 - `yarn add <package>` / `pnpm add <package>` are **not** intercepted yet -- ad-hoc resolution in this phase only covers `npm install <package>`, so yarn/pnpm named installs pass straight through to the real tool
 - `cargo add <crate...>` -- one or more crate names with no other flags, routed through `depshieldx install <crate...> --ecosystem cargo`. `cargo install` (binary crates) is not intercepted -- depshieldx's cargo support only covers `cargo add`
+- `go get <module...>` -- one or more module paths with no other flags, routed through `depshieldx install <module...> --ecosystem go`. `go install` (binary programs) is not intercepted -- depshieldx's Go support only covers `go get`
 
 Anything else (flags mixed in with a package name, other subcommands like `run`, global installs) passes straight through to the real tool untouched.
 
