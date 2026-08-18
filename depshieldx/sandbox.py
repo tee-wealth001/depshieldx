@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -25,6 +26,11 @@ DOCKER_IMAGE = "python:3.11"
 # rootfs runs --read-only, so it can't be apt-get installed at container
 # run time either. No external registry involved.
 NPM_SANDBOX_IMAGE_TAG = "depshieldx-npm-sandbox:node20"
+# Same reasoning as NPM_SANDBOX_IMAGE_TAG -- built locally from
+# docker/cargo_sandbox.Dockerfile (rust:1-slim + strace + python3, the
+# latter confirmed missing from the base image too, unlike python:3.11
+# which already has an interpreter for PyPI's own wrapper).
+CARGO_SANDBOX_IMAGE_TAG = "depshieldx-cargo-sandbox:rust1"
 SANDBOX_USER = "65534:65534"
 
 
@@ -222,6 +228,30 @@ def _ensure_npm_sandbox_image(verbose: bool = False) -> None:
     _run_command(build_command, verbose=verbose)
 
 
+def _ensure_cargo_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's rust:1-slim + strace + python3 image if it isn't
+    already present locally. Mirrors _ensure_npm_sandbox_image exactly."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", CARGO_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("docker/cargo_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        CARGO_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
 def _run_local_sandbox(bundle: DownloadBundle, install_targets: list[str], verbose: bool) -> subprocess.CompletedProcess:
     command = [
         system_python_executable(),
@@ -353,6 +383,83 @@ def prepare_npm_download_bundle(ecosystem, resolved_versions: dict[str, str]) ->
         raise
 
 
+def prepare_cargo_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """cargo's counterpart to prepare_npm_download_bundle -- downloads (and,
+    via fetch_artifact, checksum-verifies) every resolved crate's real
+    .crate tarball on the host, same as npm's version. Also builds a Cargo
+    "directory source" vendor tree (each tarball extracted into its own
+    <name>-<version>/ subdirectory with a minimal .cargo-checksum.json),
+    since that's cargo's actual supported offline-install mechanism --
+    reproduced directly that cargo has no equivalent of npm's "install from
+    a local tarball path" verb, and always needs to resolve against *some*
+    source, live registry or a local directory replacement. The raw
+    checksum accuracy inside .cargo-checksum.json doesn't matter for our
+    security model: each tarball's own bytes were already SHA256-verified
+    against crates.io's registry-reported checksum in fetch_artifact before
+    ever being extracted here, which is the same guarantee real vendor
+    checksums would provide -- confirmed directly this minimal/unverified
+    form doesn't block `cargo fetch --offline` from working.
+
+    The vendor directory lives at <temp_dir>/vendor -- a fixed, predictable
+    subpath, so run_sandbox() doesn't need a new DownloadBundle field to
+    find it.
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        for name, version, artifact in ecosystem.selected_artifact_entries(resolution):
+            artifact_path = ecosystem.fetch_artifact(artifact, Path(temp_dir))
+            vendor_entry = Path(temp_dir) / "vendor" / f"{name}-{version}"
+            vendor_entry.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(artifact_path, "r:gz") as archive:
+                # filter="data" (path-traversal/symlink hardening) only
+                # exists from Python 3.12 -- this codebase supports 3.11+
+                # (pyproject.toml), so fall back cleanly on older
+                # interpreters rather than crash with TypeError.
+                try:
+                    archive.extractall(vendor_entry, filter="data")
+                except TypeError:
+                    archive.extractall(vendor_entry)
+            # .crate tarballs contain one top-level "<name>-<version>/" dir
+            # (confirmed directly) -- flatten it so vendor_entry's contents
+            # match the layout `cargo vendor` itself produces.
+            nested = list(vendor_entry.iterdir())
+            if len(nested) == 1 and nested[0].is_dir():
+                for child in nested[0].iterdir():
+                    child.rename(vendor_entry / child.name)
+                nested[0].rmdir()
+            (vendor_entry / ".cargo-checksum.json").write_text('{"files":{},"package":""}')
+
+        downloaded_files = sorted(
+            path.name for path in Path(temp_dir).iterdir() if path.is_file()
+        )
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {
+            path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()
+        }
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -412,7 +519,10 @@ def run_sandbox(
     before the fallback branch is ever taken, for either ecosystem.
     """
     is_npm = ecosystem.name == "npm"
-    docker_image = NPM_SANDBOX_IMAGE_TAG if is_npm else DOCKER_IMAGE
+    is_cargo = ecosystem.name == "cargo"
+    docker_image = (
+        NPM_SANDBOX_IMAGE_TAG if is_npm else CARGO_SANDBOX_IMAGE_TAG if is_cargo else DOCKER_IMAGE
+    )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
     else:
@@ -464,6 +574,8 @@ def run_sandbox(
 
         if is_npm:
             bundle = prepare_npm_download_bundle(ecosystem, resolved_versions or {})
+        elif is_cargo:
+            bundle = prepare_cargo_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -530,6 +642,12 @@ def run_sandbox(
             # approach was silently scanning nothing on every deep-mode run,
             # for both ecosystems.
             host_install_dir = tempfile.mkdtemp(prefix="depshieldx_sandbox_install_")
+            # Base directory Trivy scans after the container exits. Defaults
+            # to the bind-mounted install dir above; cargo overrides this
+            # below to point at the host-side vendor directory instead, since
+            # nothing new needs to be written back out for cargo (see the
+            # is_cargo branch's comment).
+            scan_base_dir = host_install_dir
 
             env_args = []
             if is_npm:
@@ -565,6 +683,29 @@ def run_sandbox(
                 # sh -c -> node) and caught a real network exfiltration
                 # attempt from a postinstall script without it.
                 _ensure_npm_sandbox_image(verbose=verbose)
+            elif is_cargo:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_cargo.py",
+                    "/tmp/packages/vendor",
+                    *[f"{name}@={version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('sandbox_wrapper_cargo.py').parent}:/depshieldx:ro"
+                # prepare_cargo_download_bundle already built the vendor
+                # directory host-side, before the container ever runs, and
+                # `cargo fetch --offline` against a directory source writes
+                # nothing back into it (confirmed directly -- not even
+                # $CARGO_HOME is touched). So unlike npm/PyPI there's no new
+                # output that needs to survive tmpfs teardown via a
+                # bind-mounted install dir: host_install_dir/
+                # container_install_path below stay unused for cargo, and
+                # Trivy scans the host-side vendor directory directly
+                # (already bind-mounted read-only at /tmp/packages/vendor,
+                # since bundle.temp_dir itself is mounted at /tmp/packages).
+                container_install_path = "/tmp/depshieldx-cargo-unused"
+                host_scan_subpath = None
+                scan_base_dir = str(Path(bundle.temp_dir) / "vendor")
+                _ensure_cargo_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",
@@ -623,8 +764,10 @@ def run_sandbox(
 
                 # Scan the bind-mounted host directory directly -- it already
                 # holds whatever the container installed, no docker cp needed.
+                # (For cargo, scan_base_dir points at the host-side vendor
+                # directory instead of host_install_dir -- see is_cargo branch.)
                 scan_dir = (
-                    str(Path(host_install_dir) / host_scan_subpath) if host_scan_subpath else host_install_dir
+                    str(Path(scan_base_dir) / host_scan_subpath) if host_scan_subpath else scan_base_dir
                 )
                 trivy_results = _scan_host_install_dir(scan_dir)
             finally:
