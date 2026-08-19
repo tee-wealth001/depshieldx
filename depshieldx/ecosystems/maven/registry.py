@@ -157,7 +157,14 @@ def search_latest_version(group_id: str, artifact_id: str) -> str | None:
             MAVEN_SEARCH_URL,
             params={"q": f"g:{group_id} AND a:{artifact_id}", "rows": 1, "wt": "json"},
             headers={"User-Agent": MAVEN_USER_AGENT},
-            timeout=10,
+            # search.maven.org's Solr-backed search is materially slower
+            # than repo1.maven.org's CDN-backed artifact/checksum fetches
+            # (this module's other requests use a 10s timeout) -- confirmed
+            # directly, a real query for a real, well-indexed coordinate
+            # took over 15s to respond during development. A short timeout
+            # here doesn't fail safe, it just makes bare "groupId:
+            # artifactId" (no version) targets spuriously unresolvable.
+            timeout=30,
         )
         response.raise_for_status()
         docs = (response.json().get("response") or {}).get("docs") or []
