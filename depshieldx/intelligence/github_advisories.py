@@ -19,6 +19,7 @@ GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
     "npm": "npm",
     "cargo": "rust",
     "go": "go",
+    "maven": "maven",
 }
 
 

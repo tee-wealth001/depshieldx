@@ -19,6 +19,7 @@ DEPS_DEV_SYSTEM_NAMES = {
     "npm": "npm",
     "cargo": "cargo",
     "go": "go",
+    "maven": "maven",
 }
 
 

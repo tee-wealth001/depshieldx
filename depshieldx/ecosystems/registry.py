@@ -5,6 +5,7 @@ from __future__ import annotations
 from .base import Ecosystem
 from .cargo import CARGO_ECOSYSTEM
 from .go import GO_ECOSYSTEM
+from .maven import MAVEN_ECOSYSTEM
 from .npm import NPM_ECOSYSTEM
 from .pypi import PYPI_ECOSYSTEM
 
@@ -13,6 +14,7 @@ ECOSYSTEMS: dict[str, Ecosystem] = {
     NPM_ECOSYSTEM.name: NPM_ECOSYSTEM,
     CARGO_ECOSYSTEM.name: CARGO_ECOSYSTEM,
     GO_ECOSYSTEM.name: GO_ECOSYSTEM,
+    MAVEN_ECOSYSTEM.name: MAVEN_ECOSYSTEM,
 }
 
 

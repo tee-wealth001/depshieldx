@@ -56,8 +56,11 @@ def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
     against go.dev/ref/mod's module-path rules), unlike every other ecosystem here --
     lowercasing would fold together genuinely different modules and silently break
     matching against OSV/deps.dev/GitHub Advisories, which key Go entries by the exact
-    module path. Only whitespace is trimmed."""
-    if ecosystem == "go":
+    module path. Only whitespace is trimmed. Maven's "groupId:artifactId" coordinates
+    get the same treatment -- Maven Central's repository layout is case-sensitive and
+    OSV/deps.dev/GitHub Advisories all key Maven entries by the exact coordinate
+    (confirmed directly against a real OSV query response)."""
+    if ecosystem in ("go", "maven"):
         return name.strip()
     normalized = name.strip().lower()
     if ecosystem == "pypi":

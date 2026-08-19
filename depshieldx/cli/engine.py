@@ -145,14 +145,15 @@ def _uninstall_args_for_input_source(input_source, ecosystem):
     package_names = []
     seen = set()
     for target in input_source.requested_targets:
-        if ecosystem.name in ("npm", "cargo", "go"):
+        if ecosystem.name in ("npm", "cargo", "go", "maven"):
             # _package_name_from_requirement is PyPI-shaped (name==version,
             # name[extra]) and actively rejects anything containing "/",
             # which would break scoped npm packages like "@babel/core" --
             # and every Go module path (e.g. "github.com/pkg/errors").
             # npm's/cargo's/go's own "name@version" stripping already
             # exists in ecosystems/base.py and handles this correctly per
-            # ecosystem.
+            # ecosystem. Maven coordinates ("groupId:artifactId:version")
+            # get the same treatment for the same reason.
             package_name = _strip_version_spec(target, ecosystem.name).strip()
         else:
             package_name = _package_name_from_requirement(target) or target.strip()
