@@ -318,11 +318,13 @@ def _project_url(ecosystem: str, package_name: str, package_version: str) -> str
         # internal "groupId:artifactId" coordinate, so it's split first.
         group_id, _, artifact_id = package_name.partition(":")
         return f"https://central.sonatype.com/artifact/{quote(group_id)}/{quote(artifact_id)}/{quote(package_version)}"
+    if ecosystem == "nuget":
+        return f"https://www.nuget.org/packages/{quote(package_name)}/{quote(package_version)}"
     return f"https://pypi.org/project/{quote(package_name)}/{quote(package_version)}/"
 
 
 def _install_target_label(ecosystem: str, package_name: str, package_version: str) -> str:
-    if ecosystem in ("npm", "cargo", "go", "maven"):
+    if ecosystem in ("npm", "cargo", "go", "maven", "nuget"):
         return f"{package_name}@{package_version}"
     return f"{package_name}=={package_version}"
 

@@ -7,8 +7,11 @@ from depshieldx.intelligence.models import (
     _maven_compare,
     _maven_satisfies,
     _maven_satisfies_clause,
+    _normalize_nuget_version,
     _npm_satisfies,
     _npm_satisfies_clause,
+    _nuget_satisfies,
+    _nuget_satisfies_clause,
 )
 from depshieldx.intelligence.osv import OSV_ECOSYSTEM_NAMES
 
@@ -32,6 +35,12 @@ class OsvEcosystemNamesTests(unittest.TestCase):
         # org.apache.logging.log4j:log4j-core only returns results under
         # ecosystem="Maven").
         self.assertEqual(OSV_ECOSYSTEM_NAMES["maven"], "Maven")
+
+    def test_nuget_maps_to_osv_nuget_identifier(self):
+        # Confirmed directly against the real OSV API (a real query for
+        # Microsoft.IdentityModel.JsonWebTokens only returns results under
+        # ecosystem="NuGet", exact casing).
+        self.assertEqual(OSV_ECOSYSTEM_NAMES["nuget"], "NuGet")
 
 
 class NpmSatisfiesClauseTests(unittest.TestCase):
@@ -198,6 +207,79 @@ class VersionVulnerabilityMavenTests(unittest.TestCase):
     def test_unparseable_installed_version_assumes_vulnerable(self):
         vuln = VersionVulnerability(cve_id="CVE-TEST-MAVEN-5", source="osv", affected_versions=["<2.0.0"])
         self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="maven"))
+
+
+class NormalizeNugetVersionTests(unittest.TestCase):
+    """Each case here was verified directly against real NuGet version
+    strings/OSV boundaries encountered during development -- see
+    models.py's _normalize_nuget_version docstring."""
+
+    def test_pads_short_versions(self):
+        self.assertEqual(_normalize_nuget_version("0"), "0.0.0")
+        self.assertEqual(_normalize_nuget_version("1.2"), "1.2.0")
+
+    def test_folds_fourth_segment_into_build_metadata(self):
+        # Real Microsoft.IdentityModel.JsonWebTokens release.
+        self.assertEqual(_normalize_nuget_version("4.0.2.202250630"), "4.0.2+202250630")
+
+    def test_preserves_prerelease_suffix(self):
+        self.assertEqual(_normalize_nuget_version("7.0.0-preview"), "7.0.0-preview")
+        self.assertEqual(_normalize_nuget_version("5.0.0-beta7-208241120"), "5.0.0-beta7-208241120")
+
+    def test_leaves_ordinary_three_segment_version_unchanged(self):
+        self.assertEqual(_normalize_nuget_version("13.0.3"), "13.0.3")
+
+
+class NugetSatisfiesClauseTests(unittest.TestCase):
+    def test_gte_boundary(self):
+        self.assertTrue(_nuget_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_nuget_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_lt_boundary(self):
+        self.assertTrue(_nuget_satisfies_clause("1.9.9", "<2.0.0"))
+        self.assertFalse(_nuget_satisfies_clause("2.0.0", "<2.0.0"))
+
+    def test_bare_version_is_exact_match(self):
+        self.assertTrue(_nuget_satisfies_clause("1.2.3", "1.2.3"))
+        self.assertFalse(_nuget_satisfies_clause("1.2.4", "1.2.3"))
+
+    def test_nuget_satisfies_ands_comma_separated_clauses(self):
+        self.assertTrue(_nuget_satisfies("1.5.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_nuget_satisfies("2.0.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_nuget_satisfies("1.0.0", ">=1.2.3,<2.0.0"))
+
+    def test_real_jsonwebtokens_range_with_bare_zero_lower_bound(self):
+        # Real range from OSV for Microsoft.IdentityModel.JsonWebTokens
+        # (GHSA-59j7-ghrg-fj52) -- confirmed directly against the live OSV
+        # API during development. "introduced": "0" is a real, bare
+        # placeholder boundary OSV uses for "no meaningful lower bound".
+        self.assertTrue(_nuget_satisfies("4.0.2.202250630", ">=0,<5.7.0"))
+        self.assertFalse(_nuget_satisfies("5.7.0", ">=0,<5.7.0"))
+
+    def test_real_prerelease_boundary_range(self):
+        self.assertTrue(_nuget_satisfies("7.0.0-preview", ">=7.0.0-preview,<7.1.2"))
+        self.assertFalse(_nuget_satisfies("7.1.2", ">=7.0.0-preview,<7.1.2"))
+
+
+class VersionVulnerabilityNuGetTests(unittest.TestCase):
+    def test_real_jsonwebtokens_range(self):
+        vuln = VersionVulnerability(cve_id="CVE-2024-21319", source="osv", affected_versions=[">=0,<5.7.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("5.6.0", ecosystem="nuget"))
+        self.assertFalse(vuln.is_current_version_vulnerable("5.7.0", ecosystem="nuget"))
+
+    def test_fixed_in_version_uses_nuget_ordering(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-NUGET-1", source="osv", fixed_in_version="1.2.3")
+        self.assertTrue(vuln.is_current_version_vulnerable("1.2.2", ecosystem="nuget"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.2.3", ecosystem="nuget"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.5.0", ecosystem="nuget"))
+
+    def test_version_outside_range_is_not_flagged(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-NUGET-2", source="osv", affected_versions=[">=1.2.3,<2.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="nuget"))
+
+    def test_unparseable_installed_version_assumes_vulnerable(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-NUGET-3", source="osv", affected_versions=["<2.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="nuget"))
 
 
 class VersionVulnerabilityNpmTests(unittest.TestCase):

@@ -59,8 +59,12 @@ def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
     module path. Only whitespace is trimmed. Maven's "groupId:artifactId" coordinates
     get the same treatment -- Maven Central's repository layout is case-sensitive and
     OSV/deps.dev/GitHub Advisories all key Maven entries by the exact coordinate
-    (confirmed directly against a real OSV query response)."""
-    if ecosystem in ("go", "maven"):
+    (confirmed directly against a real OSV query response). NuGet package IDs get the
+    same treatment for a different reason -- nuget.org's own resolution is case-
+    insensitive, but OSV's NuGet-ecosystem matching is case-sensitive on the exact
+    canonical casing (confirmed directly: "Microsoft.IdentityModel.JsonWebTokens"
+    matches real advisories, the all-lowercase variant matches none)."""
+    if ecosystem in ("go", "maven", "nuget"):
         return name.strip()
     normalized = name.strip().lower()
     if ecosystem == "pypi":

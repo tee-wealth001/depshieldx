@@ -4,7 +4,7 @@ import subprocess
 
 import click
 
-from ...ecosystems import resolve_cargo_tool, resolve_go_tool, resolve_node_tool
+from ...ecosystems import resolve_cargo_tool, resolve_dotnet_tool, resolve_go_tool, resolve_node_tool
 from ...core.routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
 from ...core.runtime import pip_command, self_invoke_command
 from ..engine import _show_routing_enabled_message
@@ -222,6 +222,56 @@ def route_go(go_args):
     raise SystemExit(result.returncode)
 
 
+def _extract_simple_dotnet_add_package_target(args):
+    # Only intercepts the exact "add package <name>" or "add package
+    # <name> --version <version>" shape -- no project positional, no
+    # other flags. `dotnet add package` itself supports an optional
+    # <PROJECT> positional (before or after "package") and several other
+    # flags (--framework, --prerelease, --no-restore, ...) confirmed
+    # directly against its own --help output; anything beyond this exact
+    # shape passes through untouched rather than risk misinterpreting a
+    # real flag combination. depshieldx's own NuGet install support is
+    # scoped to exactly one package per invocation anyway (see
+    # ecosystems/nuget/ecosystem.py's module docstring for why), so this
+    # narrow interception matches what depshieldx can actually route
+    # through in one shot.
+    if len(args) < 2 or args[0] != "add" or args[1] != "package":
+        return None
+    remaining = args[2:]
+    if not remaining:
+        return None
+    package_name = remaining[0]
+    if package_name.startswith("-"):
+        return None
+    rest = remaining[1:]
+    if not rest:
+        return package_name
+    if len(rest) == 2 and rest[0] == "--version" and not rest[1].startswith("-"):
+        return f"{package_name}@{rest[1]}"
+    return None
+
+
+@click.argument("dotnet_args", nargs=-1, type=click.UNPROCESSED)
+def route_dotnet(dotnet_args):
+    """Internal helper used by the optional dotnet shim."""
+    args = list(dotnet_args)
+    package_target = _extract_simple_dotnet_add_package_target(args)
+    if package_target:
+        click.echo("Routing dotnet add package through depshieldx...")
+        command = self_invoke_command(["install", package_target, "--ecosystem", "nuget"])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        "depshieldx routing only intercepts a plain 'dotnet add package <name>[ --version <version>]' "
+        "with no other flags. Passing through to dotnet.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_dotnet_tool("dotnet"), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
 def register(cli):
     cli.add_command(routing)
     cli.command("route-pip", hidden=True, context_settings={"ignore_unknown_options": True})(route_pip)
@@ -230,3 +280,4 @@ def register(cli):
     cli.command("route-pnpm", hidden=True, context_settings={"ignore_unknown_options": True})(route_pnpm)
     cli.command("route-cargo", hidden=True, context_settings={"ignore_unknown_options": True})(route_cargo)
     cli.command("route-go", hidden=True, context_settings={"ignore_unknown_options": True})(route_go)
+    cli.command("route-dotnet", hidden=True, context_settings={"ignore_unknown_options": True})(route_dotnet)

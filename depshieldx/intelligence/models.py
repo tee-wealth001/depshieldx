@@ -259,6 +259,79 @@ def _maven_satisfies(version: str, spec: str) -> bool:
     return all(_maven_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+def _normalize_nuget_version(version: str) -> str:
+    """NuGet versions are SemVer2-*like* but not strict-SemVer-2.0.0-
+    compliant in two real, confirmed-directly ways: up to 4 numeric
+    segments are allowed (e.g. a real Microsoft.IdentityModel.
+    JsonWebTokens release, "4.0.2.202250630"), and OSV's own "introduced"
+    boundaries are sometimes a bare, under-3-segment placeholder like "0"
+    (confirmed directly against a real GHSA-59j7-ghrg-fj52 range) meaning
+    "no meaningful lower bound" -- strict semver.Version.parse() rejects
+    both shapes outright. A 4th+ numeric segment is folded into semver's
+    build-metadata field (ignored for precedence -- a real, accepted
+    simplification: NuGet's own comparer *does* consider a 4th segment
+    significant, but two releases differing only in a 4th-segment
+    "revision" is a narrow edge case for a vulnerability-boundary check,
+    which almost always differs at major/minor/patch -- confirmed
+    directly every real range fetched during development does). A
+    version with fewer than 3 numeric segments is zero-padded up to 3.
+    The prerelease suffix (from the first "-" onward, if any) is passed
+    through unchanged -- confirmed directly real examples like "7.0.0-
+    preview" and "5.0.0-beta7-208241120" already parse as one valid
+    semver prerelease identifier as-is."""
+    version = version.strip()
+    dash_index = version.find("-")
+    numeric_part = version if dash_index == -1 else version[:dash_index]
+    suffix = "" if dash_index == -1 else version[dash_index:]
+
+    segments = numeric_part.split(".")
+    while len(segments) < 3:
+        segments.append("0")
+    extra_segments, segments = segments[3:], segments[:3]
+
+    normalized = ".".join(segments)
+    if extra_segments:
+        normalized += "+" + ".".join(extra_segments)
+    return normalized + suffix
+
+
+def _nuget_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using
+    real SemVer 2.0.0 ordering (via _normalize_nuget_version) -- mirrors
+    the cargo/go branches' identical "bare version = exact match"
+    convention. Verified directly against real OSV NuGet advisory data
+    (Microsoft.IdentityModel.JsonWebTokens' GHSA-59j7-ghrg-fj52 and
+    related ranges)."""
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    try:
+        current = semver.Version.parse(_normalize_nuget_version(version))
+        target = semver.Version.parse(_normalize_nuget_version(boundary))
+    except ValueError:
+        return False
+
+    if operator == ">=":
+        return current >= target
+    if operator == "<=":
+        return current <= target
+    if operator == ">":
+        return current > target
+    if operator == "<":
+        return current < target
+    return current == target
+
+
+def _nuget_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_nuget_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -308,6 +381,9 @@ class VersionVulnerability:
 
         if ecosystem == "maven":
             return self._is_current_version_vulnerable_maven(version)
+
+        if ecosystem == "nuget":
+            return self._is_current_version_vulnerable_nuget(version)
 
         try:
             check_version = Version(version)
@@ -414,6 +490,28 @@ class VersionVulnerability:
                 if _maven_compare(version, self.fixed_in_version) < 0:
                     return True
             except Exception:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_nuget(self, version: str) -> bool:
+        try:
+            current_version = semver.Version.parse(_normalize_nuget_version(version))
+        except ValueError:
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _nuget_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                if current_version < semver.Version.parse(_normalize_nuget_version(self.fixed_in_version)):
+                    return True
+            except ValueError:
                 pass
 
         return False
