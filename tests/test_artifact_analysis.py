@@ -340,6 +340,46 @@ class ArtifactAnalysisTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertEqual(result["finding_count"], 0)
 
+    def test_plain_jar_with_only_class_and_resource_files_is_not_flagged(self):
+        # Real jars are plain zip archives (confirmed directly) -- the
+        # existing .whl/.zip branch already opens and scans them, so
+        # adding ".jar" to that same top-level suffix check (no new
+        # extraction code) is what makes this artifact scannable at all.
+        # .class files aren't text source (compiled bytecode) and get no
+        # TEXT_EXTENSIONS entry, so ordinary jar contents like these
+        # trip nothing here -- mirrors the plain-.go-file-in-zip case
+        # above: adding a new archive format shouldn't manufacture false
+        # positives out of completely ordinary contents.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "com.example_widget-1.0.0.jar"
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+                archive.writestr("com/example/Widget.class", b"\xca\xfe\xba\xbe\x00\x00\x00\x41")
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["finding_count"], 0)
+
+    def test_jar_with_embedded_native_library_is_scanned(self):
+        # A real, legitimate pattern (JNI-bundling jars ship a native .so/
+        # .dll alongside their .class files) -- NATIVE_BINARY_SUFFIXES
+        # already recognizes ".so" regardless of the containing archive
+        # format, so this needs no Maven-specific detection code, only
+        # ".jar" reaching the same generic zip-member scan every other
+        # archive format already gets.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "com.example_native-1.0.0.jar"
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+                native_payload = b"\x7fELF" + b"\x00" * 60 + b"powershell -enc ZmFrZQ=="
+                archive.writestr("native/linux-x86-64/libwidget.so", native_payload)
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertGreater(result["finding_count"], 0)
+        self.assertTrue(any(finding["code"] == "binary_shell_fragments" for finding in result["findings"]))
+
     def test_pe_extension_with_embedded_second_pe_and_exec_indicators_still_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = Path(temp_dir) / "pkg-0.1.0.whl"

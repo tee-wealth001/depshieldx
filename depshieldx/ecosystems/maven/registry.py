@@ -55,6 +55,7 @@ work, not a gap to paper over now.
 """
 
 import json
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -110,6 +111,104 @@ def fetch_jar(group_id: str, artifact_id: str, version: str) -> bytes:
     )
     response.raise_for_status()
     return response.content
+
+
+def _local_tag(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def parse_bom_import_coordinates(pom_text: str) -> list[tuple[str, str, str]]:
+    """Extracts every <dependencyManagement><dependencies><dependency>
+    entry with <scope>import</scope> and <type>pom</type> -- a "BOM
+    import", the other real way (besides <parent> inheritance) a POM can
+    require a second POM be present just to resolve, confirmed directly
+    against a real, extremely common pattern: org.apache.commons:
+    commons-lang3:3.17.0's parent chain (commons-parent:73) imports org.
+    junit:junit-bom as a dependency-management BOM, and Maven's
+    dependency collector fails outright without it -- the same class of
+    "metadata-only POM the resolved coordinate never appears in `dependency
+    :list`'s output" problem parse_parent_coordinate solves for
+    inheritance, just via a different POM construct.
+
+    A BOM's own <version> element is frequently a "${property}"
+    placeholder (confirmed directly for the commons-lang3 example above:
+    "${commons.junit.version}") rather than a literal version string --
+    resolved here only against the *same* POM's own <properties> block
+    (also confirmed real for that example: commons-parent:73 defines
+    commons.junit.version itself, not an ancestor). Real Maven also
+    resolves properties inherited from further up the parent chain or
+    injected by profiles/plugins; that broader case isn't handled here --
+    entries whose property can't be resolved locally are skipped rather
+    than guessed at, a real and accepted coverage gap analogous to
+    ecosystems/go's Stage 3 skipped_modules, not a silent correctness
+    bug: if a skipped BOM import turns out to be genuinely required, the
+    sandboxed `mvn --offline` step still fails with a clear, real error
+    naming exactly what's missing, rather than resolving incorrectly.
+    """
+    root = ET.fromstring(pom_text)
+
+    properties: dict[str, str] = {}
+    for props_el in root:
+        if _local_tag(props_el.tag) != "properties":
+            continue
+        for prop in props_el:
+            properties[_local_tag(prop.tag)] = (prop.text or "").strip()
+
+    def _resolve_property(value: str) -> str | None:
+        if value.startswith("${") and value.endswith("}"):
+            return properties.get(value[2:-1])
+        return value
+
+    imports: list[tuple[str, str, str]] = []
+    for dep_mgmt in root:
+        if _local_tag(dep_mgmt.tag) != "dependencyManagement":
+            continue
+        for deps_el in dep_mgmt:
+            if _local_tag(deps_el.tag) != "dependencies":
+                continue
+            for dependency in deps_el:
+                if _local_tag(dependency.tag) != "dependency":
+                    continue
+                fields = {_local_tag(field.tag): (field.text or "").strip() for field in dependency}
+                if fields.get("scope") != "import" or fields.get("type") != "pom":
+                    continue
+                group_id, artifact_id, version = fields.get("groupId"), fields.get("artifactId"), fields.get("version")
+                if not (group_id and artifact_id and version):
+                    continue
+                resolved_version = _resolve_property(version)
+                if resolved_version:
+                    imports.append((group_id, artifact_id, resolved_version))
+    return imports
+
+
+def parse_parent_coordinate(pom_text: str) -> tuple[str, str, str] | None:
+    """Extracts a POM's own <parent><groupId>/<artifactId>/<version></parent>
+    coordinate, or None if it has none. Used to walk a resolved artifact's
+    full parent-POM chain for deep-mode's offline local-repository bundle
+    (runner.py's prepare_maven_download_bundle) -- confirmed directly a
+    missing parent POM fails Maven's dependency collector outright even
+    when the child artifact's own jar+pom are present (e.g. com.google.
+    errorprone:error_prone_annotations:2.27.0's parent, error_prone_
+    parent:2.27.0, is real metadata-only inheritance, never itself a
+    `dependency:list` entry). Namespace-agnostic on purpose: real POMs
+    declare the "http://maven.apache.org/POM/4.0.0" default namespace,
+    but stripping namespaces from parsed tags (rather than hardcoding
+    that one URI) tolerates POMs using no namespace at all, which
+    Maven's own parser also accepts (confirmed directly against a real,
+    intentionally namespace-less scratch pom.xml resolving without
+    error)."""
+    root = ET.fromstring(pom_text)
+    for child in root:
+        if _local_tag(child.tag) != "parent":
+            continue
+        values = {}
+        for field in child:
+            values[_local_tag(field.tag)] = (field.text or "").strip()
+        group_id, artifact_id, version = values.get("groupId"), values.get("artifactId"), values.get("version")
+        if group_id and artifact_id and version:
+            return group_id, artifact_id, version
+        return None
+    return None
 
 
 def fetch_best_checksum(group_id: str, artifact_id: str, version: str) -> tuple[str, str] | None:
