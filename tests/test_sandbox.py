@@ -14,11 +14,13 @@ from depshieldx.ecosystems.cargo import CARGO_ECOSYSTEM
 from depshieldx.ecosystems.go import GO_ECOSYSTEM
 from depshieldx.ecosystems.maven import MAVEN_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
+from depshieldx.ecosystems.nuget import NUGET_ECOSYSTEM
 from depshieldx.sandbox import (
     CARGO_SANDBOX_IMAGE_TAG,
     GO_SANDBOX_IMAGE_TAG,
     MAVEN_SANDBOX_IMAGE_TAG,
     NPM_SANDBOX_IMAGE_TAG,
+    NUGET_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
     SandboxResult,
@@ -29,6 +31,7 @@ from depshieldx.sandbox import (
     _ensure_go_sandbox_image,
     _ensure_maven_sandbox_image,
     _ensure_npm_sandbox_image,
+    _ensure_nuget_sandbox_image,
     _extract_report,
     _run_command,
     _sandbox_cache_fingerprint,
@@ -38,6 +41,7 @@ from depshieldx.sandbox import (
     prepare_go_download_bundle,
     prepare_maven_download_bundle,
     prepare_npm_download_bundle,
+    prepare_nuget_download_bundle,
     run_sandbox,
 )
 from depshieldx.security.sandbox.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
@@ -971,6 +975,160 @@ class MavenSandboxTests(unittest.TestCase):
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/maven-deep")
         self.assertIn(":/tmp/depshieldx-maven-unused:rw", " ".join(docker_command))
+
+
+class NuGetSandboxTests(unittest.TestCase):
+    def _selected_entries(self, package_id, version):
+        artifact = {
+            "url": f"https://api.nuget.org/v3-flatcontainer/x/{package_id}.{version}.nupkg",
+            "filename": f"{package_id}.{version}.nupkg",
+            "checksum_algorithm": "SHA512",
+            "checksum": None,
+        }
+        return [(package_id, version, artifact)]
+
+    def _fake_nupkg_bytes(self) -> bytes:
+        # A real, minimal, openable zip archive -- analyze_artifacts()
+        # opens every ".nupkg" as a real zip (nupkgs are plain zip
+        # archives, confirmed directly), so arbitrary non-zip bytes
+        # correctly raise BadZipFile there rather than being silently
+        # accepted.
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("Newtonsoft.Json.nuspec", '<?xml version="1.0"?><package></package>')
+        return buffer.getvalue()
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox.resolve_dotnet_tool", return_value="/usr/local/bin/dotnet")
+    @patch.object(NUGET_ECOSYSTEM, "fetch_artifact")
+    @patch.object(NUGET_ECOSYSTEM, "selected_artifact_entries")
+    def test_prepare_nuget_download_bundle_builds_flat_feed_and_scratch_csproj(
+        self, mock_entries, mock_fetch_artifact, _mock_which, mock_subprocess_run
+    ):
+        package_id, version = "Newtonsoft.Json", "13.0.3"
+        mock_entries.return_value = self._selected_entries(package_id, version)
+
+        def _fake_fetch_artifact(artifact, destination):
+            path = Path(destination) / artifact["filename"]
+            path.write_bytes(self._fake_nupkg_bytes())
+            return path
+
+        mock_fetch_artifact.side_effect = _fake_fetch_artifact
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["dotnet", "restore"], returncode=0, stdout="", stderr=""
+        )
+
+        bundle = prepare_nuget_download_bundle(NUGET_ECOSYSTEM, {package_id: version})
+        try:
+            self.assertIn("Newtonsoft.Json.13.0.3.nupkg", bundle.downloaded_files)
+            self.assertIn("scratch.csproj", bundle.downloaded_files)
+            self.assertIn("NuGet.Config", bundle.downloaded_files)
+
+            csproj_text = (Path(bundle.temp_dir) / "scratch.csproj").read_text(encoding="utf-8")
+            self.assertIn('Include="Newtonsoft.Json"', csproj_text)
+            self.assertIn('Version="[13.0.3]"', csproj_text)
+
+            config_text = (Path(bundle.temp_dir) / "NuGet.Config").read_text(encoding="utf-8")
+            self.assertIn("<clear", config_text)
+            self.assertIn("/tmp/packages", config_text)
+
+            # The lock-file-generation restore runs BEFORE NuGet.Config is
+            # written (so it isn't accidentally constrained to the local-
+            # only source list meant for the sandboxed restore).
+            restore_args = mock_subprocess_run.call_args.args[0]
+            self.assertEqual(restore_args[0], "/usr/local/bin/dotnet")
+            self.assertIn("restore", restore_args)
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_nuget_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_nuget_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_nuget_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_nuget_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(NUGET_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("nuget_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_nuget_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_nuget_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_nuget_image_and_nuget_wrapper_for_nuget_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/nuget-deep",
+            downloaded_files=["Newtonsoft.Json.13.0.3.nupkg", "scratch.csproj", "NuGet.Config"],
+            artifact_hashes={"Newtonsoft.Json.13.0.3.nupkg": "abc"},
+            requirements_path="/tmp/nuget-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"download_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"Newtonsoft.Json": "13.0.3"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=NUGET_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(NUGET_ECOSYSTEM, {"Newtonsoft.Json": "13.0.3"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(NUGET_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_nuget.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("Newtonsoft.Json@13.0.3", docker_command)
+        self.assertIn(
+            "/tmp/depshieldx-nuget-work:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for NuGet -- the
+        # flat .nupkg/scratch.csproj/NuGet.Config layout was already
+        # built host-side, so Trivy scans the bundle directory directly
+        # instead of the (unused, empty) bind-mounted install dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/nuget-deep")
+        self.assertIn(":/tmp/depshieldx-nuget-unused:rw", " ".join(docker_command))
 
 
 class EvidenceCollectorTests(unittest.TestCase):
