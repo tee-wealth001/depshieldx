@@ -7,6 +7,7 @@ from .cargo import CARGO_ECOSYSTEM
 from .go import GO_ECOSYSTEM
 from .maven import MAVEN_ECOSYSTEM
 from .npm import NPM_ECOSYSTEM
+from .nuget import NUGET_ECOSYSTEM
 from .pypi import PYPI_ECOSYSTEM
 
 ECOSYSTEMS: dict[str, Ecosystem] = {
@@ -15,6 +16,7 @@ ECOSYSTEMS: dict[str, Ecosystem] = {
     CARGO_ECOSYSTEM.name: CARGO_ECOSYSTEM,
     GO_ECOSYSTEM.name: GO_ECOSYSTEM,
     MAVEN_ECOSYSTEM.name: MAVEN_ECOSYSTEM,
+    NUGET_ECOSYSTEM.name: NUGET_ECOSYSTEM,
 }
 
 

@@ -20,6 +20,7 @@ DEPS_DEV_SYSTEM_NAMES = {
     "cargo": "cargo",
     "go": "go",
     "maven": "maven",
+    "nuget": "nuget",
 }
 
 

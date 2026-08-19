@@ -13,6 +13,7 @@ from .cargo import CARGO_ECOSYSTEM, CargoEcosystem, resolve_cargo_tool
 from .go import GO_ECOSYSTEM, GoEcosystem, resolve_go_tool
 from .maven import MAVEN_ECOSYSTEM, MavenEcosystem, resolve_maven_tool
 from .npm import NPM_ECOSYSTEM, NpmEcosystem, resolve_node_tool
+from .nuget import NUGET_ECOSYSTEM, NuGetEcosystem, resolve_dotnet_tool
 from .pypi import PYPI_ECOSYSTEM, PyPiEcosystem
 from .registry import ECOSYSTEMS, ecosystem_for_name
 
@@ -34,6 +35,9 @@ __all__ = [
     "MAVEN_ECOSYSTEM",
     "MavenEcosystem",
     "resolve_maven_tool",
+    "NUGET_ECOSYSTEM",
+    "NuGetEcosystem",
+    "resolve_dotnet_tool",
     "ECOSYSTEMS",
     "ecosystem_for_name",
 ]

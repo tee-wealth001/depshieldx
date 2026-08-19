@@ -5,6 +5,7 @@ import tomllib
 NPM_LOCKFILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
 CARGO_LOCKFILE_NAMES = {"Cargo.lock"}
 GO_LOCKFILE_NAMES = {"go.sum"}
+NUGET_LOCKFILE_NAMES = {"packages.lock.json"}
 
 
 @dataclass
@@ -114,6 +115,18 @@ def load_input_source(
                 requested_targets=[lockfile],
                 pip_args=[],
                 ecosystem="go",
+            )
+        if lockfile_name in NUGET_LOCKFILE_NAMES:
+            # NuGetEcosystem.resolve() parses packages.lock.json directly
+            # (unlike Cargo.lock/go.sum, it's self-contained -- no sibling
+            # manifest read needed, "resolved" and "type": "Direct" both
+            # live in the lockfile itself).
+            return InputSource(
+                source_type="lockfile",
+                label=lockfile_name,
+                requested_targets=[lockfile],
+                pip_args=[],
+                ecosystem="nuget",
             )
         if lockfile_name == "uv.lock":
             requested_targets = _parse_uv_lock(lockfile)

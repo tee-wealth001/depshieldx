@@ -15,6 +15,7 @@ OSV_ECOSYSTEM_NAMES = {
     "cargo": "crates.io",
     "go": "Go",
     "maven": "Maven",
+    "nuget": "NuGet",
 }
 
 
