@@ -380,6 +380,58 @@ class ArtifactAnalysisTests(unittest.TestCase):
         self.assertGreater(result["finding_count"], 0)
         self.assertTrue(any(finding["code"] == "binary_shell_fragments" for finding in result["findings"]))
 
+    def test_plain_nupkg_with_only_dll_and_metadata_is_not_flagged(self):
+        # Real .nupkg files are plain zip archives (confirmed directly) --
+        # the existing .whl/.zip/.jar branch already opens and scans
+        # them, so adding ".nupkg" to that same top-level suffix check
+        # (no new extraction code) is what makes this artifact scannable
+        # at all. .dll is already in NATIVE_BINARY_SUFFIXES for the
+        # unrelated reason Windows PE binaries already needed it, so an
+        # ordinary, unremarkable assembly trips nothing here.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "Demo.Widget.1.0.0.nupkg"
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("Demo.Widget.nuspec", "<?xml version=\"1.0\"?><package></package>")
+                archive.writestr("lib/net8.0/Demo.Widget.dll", b"MZ" + b"\x00" * 62)
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        self.assertEqual(result["finding_count"], 0)
+
+    def test_real_microsoft_signed_dll_url_and_api_names_are_not_flagged(self):
+        # Real, confirmed-directly false positive: caught during
+        # development against a genuine, widely-used Microsoft NuGet
+        # package (System.Xml.XmlDocument 4.3.0). Every Authenticode-
+        # code-signed Windows/.NET binary embeds its signing
+        # certificate's CRL/cert-chain URLs (crl.microsoft.com, www.
+        # microsoft.com/pki/...) as literal strings -- boilerplate
+        # code-signing metadata, not attacker-controlled signal -- and
+        # this specific DLL's real strings included "IsConnected" and
+        # "CreateProcessingInstruction" (both real, ordinary .NET XML
+        # DOM API names), which the naive substring checks for
+        # "connect"/"createprocess" matched incidentally. Combined, this
+        # used to trip a HIGH-severity binary_network_exec_combo finding
+        # -- blocking deep-mode installs for an entirely ordinary,
+        # first-party Microsoft package.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact = Path(temp_dir) / "System.Xml.XmlDocument.4.3.0.nupkg"
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("System.Xml.XmlDocument.nuspec", "<?xml version=\"1.0\"?><package></package>")
+                dll_strings = (
+                    b"http://crl.microsoft.com/pki/crl/products/MicCodSigPCA_08-31-2010.crl\x00"
+                    b"http://www.w3.org/2000/xmlns/\x00"
+                    b"IsConnected\x00"
+                    b"CreateProcessingInstruction\x00"
+                )
+                archive.writestr("lib/netstandard1.3/System.Xml.XmlDocument.dll", b"MZ" + b"\x00" * 62 + dll_strings)
+
+            result = analyze_artifacts(temp_dir)
+
+        self.assertFalse(result["blocked"])
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertNotIn("binary_network_exec_combo", codes)
+
     def test_pe_extension_with_embedded_second_pe_and_exec_indicators_still_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact = Path(temp_dir) / "pkg-0.1.0.whl"

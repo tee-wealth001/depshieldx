@@ -33,7 +33,16 @@ MAX_BINARY_SCAN_BYTES = 1_048_576
 # in INSTALL_SCRIPT_NAMES either: like Go, Maven has no canonical,
 # always-executed build-time script that runs during plain dependency
 # resolution -- annotation processors only run during a real `mvn
-# compile`, not `dependency:resolve` alone.
+# compile`, not `dependency:resolve` alone. NuGet .nupkg files get the
+# same treatment as jars for the same reason -- compiled .dll assemblies,
+# not text source (already caught by NATIVE_BINARY_SUFFIXES below, which
+# already lists ".dll" for the unrelated reason Windows PE binaries
+# already needed it), and real .nupkg files are plain zip archives
+# (confirmed directly) needing only the top-level suffix addition, no
+# INSTALL_SCRIPT_NAMES entry: `dotnet restore` alone doesn't execute a
+# package's build/*.targets content either (confirmed directly with a
+# real hand-built test package -- see sandbox_wrapper_nuget.py's module
+# docstring), only a later `dotnet build` would.
 TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs", ".go"}
 INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json", "build.rs"}
 NATIVE_BINARY_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
@@ -418,6 +427,22 @@ def _is_benign_url(url: str) -> bool:
         "python.org",
         "docs.python.org",
         "readthedocs.io",
+        # Real, confirmed-directly false-positive source: every
+        # Authenticode-code-signed Windows PE/.NET binary embeds its
+        # signing certificate's CRL/certificate-chain URLs as literal
+        # strings (crl.microsoft.com, www.microsoft.com/pki/...) --
+        # standard code-signing infrastructure metadata, not attacker-
+        # controlled or meaningful signal on its own. Caught this
+        # tripping a real HIGH-severity binary_network_exec_combo false
+        # positive against a genuine, widely-used Microsoft NuGet
+        # package (System.Xml.XmlDocument) during development.
+        # w3.org covers the XML namespace URIs (e.g. "http://www.w3.org/
+        # 2000/xmlns/") .NET XML assemblies embed as literal strings for
+        # unrelated, legitimate reasons -- "microsoft.com" alone already
+        # covers every *.microsoft.com subdomain via the substring check
+        # below, schemas.microsoft.com included.
+        "microsoft.com",
+        "w3.org",
     }
     url_lower = url.lower()
     return any(domain in url_lower for domain in benign_domains)
@@ -542,7 +567,7 @@ def analyze_artifact(artifact_path: Path) -> List[StaticFinding]:
         findings.extend(_scan_binary(artifact_path.name, artifact_path.name, data))
         return findings
 
-    if artifact_path.suffix in (".whl", ".zip", ".jar"):
+    if artifact_path.suffix in (".whl", ".zip", ".jar", ".nupkg"):
         with zipfile.ZipFile(artifact_path) as archive:
             for member_name in _candidate_members(artifact_path.name, archive.namelist()):
                 if _is_native_binary(member_name):

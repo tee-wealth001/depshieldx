@@ -30,6 +30,7 @@ from ...ecosystems.maven.registry import (
     parse_bom_import_coordinates,
     parse_parent_coordinate,
 )
+from ...ecosystems.nuget.ecosystem import _build_scratch_csproj, resolve_dotnet_tool
 from ...core.resolver import ResolutionResult
 from ...core.runtime import pip_command, resource_path, system_python_executable
 from ..trivy import scan_filesystem
@@ -61,6 +62,13 @@ GO_SANDBOX_IMAGE_TAG = "depshieldx-go-sandbox:go1"
 # Dockerfile's own docstring for why Maven's sandbox needs one and
 # cargo/go's don't).
 MAVEN_SANDBOX_IMAGE_TAG = "depshieldx-maven-sandbox:maven3"
+# Same reasoning as MAVEN_SANDBOX_IMAGE_TAG -- built locally from
+# security/sandbox/docker/nuget_sandbox.Dockerfile (mcr.microsoft.com/
+# dotnet/sdk:8.0 + strace + python3, both confirmed missing from the
+# base image). Unlike Maven, no build-time pre-warming is needed --
+# confirmed directly `dotnet restore` needs nothing beyond what the .NET
+# SDK itself already ships.
+NUGET_SANDBOX_IMAGE_TAG = "depshieldx-nuget-sandbox:sdk8"
 SANDBOX_USER = "65534:65534"
 
 
@@ -327,6 +335,32 @@ def _ensure_maven_sandbox_image(verbose: bool = False) -> None:
         str(dockerfile),
         "-t",
         MAVEN_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
+def _ensure_nuget_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's dotnet/sdk:8.0 + strace + python3 image if it
+    isn't already present locally. Mirrors _ensure_maven_sandbox_image,
+    minus the plugin-cache pre-warming Maven's own version needs (see
+    nuget_sandbox.Dockerfile's docstring for why NuGet doesn't)."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", NUGET_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("security/sandbox/docker/nuget_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        NUGET_SANDBOX_IMAGE_TAG,
         str(dockerfile.parent),
     ]
     _run_command(build_command, verbose=verbose)
@@ -789,6 +823,127 @@ def prepare_maven_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
         raise
 
 
+# The container-side bind-mount path every ecosystem's bundle directory is
+# mounted at (confirmed directly against the other three deep-mode
+# ecosystems' own run_sandbox() branches below) -- baked into the host-
+# side NuGet.Config here since sandbox_wrapper_nuget.py just copies that
+# file as-is, it doesn't rewrite paths itself.
+_NUGET_SANDBOX_BUNDLE_MOUNT_PATH = "/tmp/packages"
+
+
+def _build_nuget_config(source_path: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        "<configuration>\n"
+        "  <packageSources>\n"
+        "    <clear />\n"
+        f'    <add key="local" value="{source_path}" />\n'
+        "  </packageSources>\n"
+        "</configuration>\n"
+    )
+
+
+def prepare_nuget_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """NuGet's counterpart to prepare_maven_download_bundle -- downloads
+    (and, via fetch_artifact, checksum-verifies against the registry's
+    own reported hash) every resolved package's real .nupkg directly into
+    temp_dir's root, laid out exactly as NuGet's own local-folder package-
+    source mechanism expects (a flat directory of .nupkg files, no
+    hierarchical extraction needed -- confirmed directly against a real
+    Docker container under this project's full isolation posture), so the
+    sandboxed `dotnet restore` (sandbox_wrapper_nuget.py) can resolve
+    entirely offline via a NuGet.Config with `<clear/>` and a single
+    local-folder source.
+
+    Unlike prepare_maven_download_bundle, no parent-POM-equivalent walk
+    is needed -- NuGet has no analogous "second POM required just to
+    resolve" construct (confirmed directly: package dependency metadata
+    lives entirely in the .nuspec each .nupkg already carries, no
+    separate ancestor-package fetch required).
+
+    Also writes a scratch .csproj (every resolved package as a direct
+    dependency, reusing ecosystems/nuget/ecosystem.py's own
+    _build_scratch_csproj -- same "pin everything, not just the
+    requested targets" reasoning as prepare_cargo_download_bundle/
+    prepare_go_download_bundle/prepare_maven_download_bundle), then runs
+    a real (networked, host-side) `dotnet restore` against it -- the
+    same real toolchain call MavenEcosystem's own scratch-resolve flow
+    already makes, not a new privileged action -- purely to produce a
+    real packages.lock.json. This is required, not optional, and
+    confirmed directly: Trivy's own NuGet scanner detects nothing at all
+    from a bare .csproj (real test: "Number of language-specific files
+    num=0"), only from a real packages.lock.json (confirmed directly
+    against three genuine CVEs, including two real HIGH-severity ones,
+    correctly detected once one is present). This restore is a separate
+    concern from the sandboxed one sandbox_wrapper_nuget.py runs inside
+    the isolated container -- it runs on the trusted host purely to
+    produce a Trivy-scannable artifact, not to prove offline
+    installability (the checksum-verified .nupkg fetch above already
+    independently proves artifact integrity regardless of what this
+    restore does). NuGet.Config -- the sandboxed restore's own offline,
+    local-folder-only source list -- is written only *after* this real
+    restore completes, so the networked restore isn't accidentally
+    constrained by it.
+
+    Every downloaded .nupkg already sits flat in temp_dir's root (no
+    separate flat-copy step needed the way Maven's nested m2-repo layout
+    requires) so analyze_artifacts() finds it the same way it already
+    finds .whl/.crate/.jar files -- real .nupkg files are plain zip
+    archives (confirmed directly), so the existing generic zip-archive
+    handler in artifact_analysis.py only needs ".nupkg" added to the
+    top-level suffix check, no new extraction code. .NET assembly DLLs
+    inside get no new detection code either -- NATIVE_BINARY_SUFFIXES
+    already recognizes ".dll" for the unrelated reason Windows PE
+    binaries already needed it.
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        for package_id, version, artifact in ecosystem.selected_artifact_entries(resolution):
+            ecosystem.fetch_artifact(artifact, Path(temp_dir))
+
+        csproj_path = Path(temp_dir) / "scratch.csproj"
+        csproj_path.write_bytes(_build_scratch_csproj(list(resolved_versions.items())).encode("utf-8"))
+
+        lock_file_result = subprocess.run(
+            [resolve_dotnet_tool("dotnet"), "restore", str(csproj_path)],
+            cwd=temp_dir,
+            capture_output=True,
+            text=True,
+        )
+        if lock_file_result.returncode != 0:
+            detail = (lock_file_result.stderr or lock_file_result.stdout or "").strip()
+            raise RuntimeError(f"dotnet could not produce a lock file for the resolved package set: {detail}")
+
+        nuget_config_path = Path(temp_dir) / "NuGet.Config"
+        nuget_config_path.write_bytes(_build_nuget_config(_NUGET_SANDBOX_BUNDLE_MOUNT_PATH).encode("utf-8"))
+
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -851,12 +1006,15 @@ def run_sandbox(
     is_cargo = ecosystem.name == "cargo"
     is_go = ecosystem.name == "go"
     is_maven = ecosystem.name == "maven"
+    is_nuget = ecosystem.name == "nuget"
     docker_image = (
         NPM_SANDBOX_IMAGE_TAG
         if is_npm
         else CARGO_SANDBOX_IMAGE_TAG
         if is_cargo
-        else GO_SANDBOX_IMAGE_TAG if is_go else MAVEN_SANDBOX_IMAGE_TAG if is_maven else DOCKER_IMAGE
+        else GO_SANDBOX_IMAGE_TAG
+        if is_go
+        else MAVEN_SANDBOX_IMAGE_TAG if is_maven else NUGET_SANDBOX_IMAGE_TAG if is_nuget else DOCKER_IMAGE
     )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
@@ -915,6 +1073,8 @@ def run_sandbox(
             bundle = prepare_go_download_bundle(ecosystem, resolved_versions or {})
         elif is_maven:
             bundle = prepare_maven_download_bundle(ecosystem, resolved_versions or {})
+        elif is_nuget:
+            bundle = prepare_nuget_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -1166,6 +1326,48 @@ def run_sandbox(
                 ]
                 env_args = ["-e", "HOME=/tmp"]
                 _ensure_maven_sandbox_image(verbose=verbose)
+            elif is_nuget:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_nuget.py",
+                    "/tmp/packages",
+                    *[f"{name}@{version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('security/sandbox/sandbox_wrapper_nuget.py').parent}:/depshieldx:ro"
+                # prepare_nuget_download_bundle already built the flat
+                # .nupkg/scratch.csproj/NuGet.Config layout host-side,
+                # before the container ever runs. Unlike Maven, no
+                # plugin-cache merge is needed -- confirmed directly
+                # `dotnet restore` needs nothing beyond what the .NET SDK
+                # itself already ships. So, like the other three
+                # ecosystems, there's no new output that needs to
+                # survive tmpfs teardown via a bind-mounted install dir:
+                # host_install_dir/container_install_path stay unused
+                # for NuGet, and Trivy scans the host-side bundle
+                # directory directly (already bind-mounted read-only at
+                # /tmp/packages, since bundle.temp_dir itself is mounted
+                # there) -- Trivy's own NuGet support reads a real
+                # packages.lock.json natively (confirmed directly: a bare
+                # .csproj alone gets zero detection), which
+                # prepare_nuget_download_bundle already generated
+                # host-side via a real (networked) restore.
+                container_install_path = "/tmp/depshieldx-nuget-unused"
+                host_scan_subpath = None
+                scan_base_dir = bundle.temp_dir
+                # sandbox_wrapper_nuget.py points $HOME (and so NuGet's
+                # own default global packages folder, $HOME/.nuget/
+                # packages) at its own writable work directory --
+                # confirmed directly SANDBOX_USER's real default HOME
+                # has nothing writable to extract packages into
+                # otherwise. 256m matches the other three ecosystems'
+                # own build-stage tmpfs sizing rather than being tuned to
+                # the single case observed.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-nuget-work:rw,nosuid,nodev,exec,size=256m",
+                ]
+                env_args = ["-e", "HOME=/tmp"]
+                _ensure_nuget_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",
