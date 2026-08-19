@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 import nodesemver
@@ -157,6 +158,107 @@ def _go_satisfies(version: str, spec: str) -> bool:
     return all(_go_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+# Maven's real version-precedence qualifier table (org.apache.maven.
+# artifact.versioning.ComparableVersion) confirmed directly by running
+# that exact class's own comparison tool -- `java -cp maven-artifact-*.jar
+# org.apache.maven.artifact.versioning.ComparableVersion <versions...>` --
+# against a real Maven install: alpha < beta < milestone < rc/cr <
+# snapshot < (no qualifier/ga/final/release) < sp. Confirmed the same way:
+# any *unrecognized* qualifier (e.g. real Central examples like Guava's
+# "-jre"/"-android" flavor suffixes) sorts after even the release tier
+# ("33.4.0-jre" > "33.4.0").
+_MAVEN_QUALIFIER_RANK = {
+    "alpha": 0, "beta": 1, "milestone": 2, "rc": 3, "cr": 3,
+    "snapshot": 4, "": 5, "ga": 5, "final": 5, "release": 5, "sp": 6,
+}
+_MAVEN_TOKEN = re.compile(r"\d+|[a-zA-Z]+")
+
+
+def _maven_tokenize(version: str) -> list[tuple[int, int | str]]:
+    """Flat token list for one Maven version, splitting on '.'/'-' and on
+    every digit<->letter transition (e.g. "1.0-rc1" -> ["1", "0", "rc",
+    "1"]) -- mirrors ComparableVersion's own tokenization for the common
+    case. Each token becomes (0, rank) for a recognized qualifier,
+    (1, int) for a numeric run, or (2, text) for an unrecognized
+    qualifier; the tier ordering (known-qualifier < numeric < unrecognized
+    -qualifier) is confirmed directly, see the module comment above.
+
+    Deliberately doesn't reproduce ComparableVersion's full recursive
+    nested-list structure (a '-' after a qualifier starts a genuinely
+    nested sub-list in the real algorithm, e.g. "1.0-rc1" internally is
+    [1, [rc, [1]]], not a flat 4-token list) -- getting the common,
+    real-world case (release/pre-release/snapshot qualifiers, unrecognized
+    build-flavor suffixes) exactly right, confirmed against real `mvn`
+    output, was judged a better tradeoff than a full reimplementation with
+    unverified edge-case behavior for something this security-sensitive.
+    """
+    tokens: list[tuple[int, int | str]] = []
+    for raw in _MAVEN_TOKEN.findall(version.strip()):
+        if raw.isdigit():
+            tokens.append((1, int(raw)))
+        else:
+            lowered = raw.lower()
+            if lowered in _MAVEN_QUALIFIER_RANK:
+                tokens.append((0, _MAVEN_QUALIFIER_RANK[lowered]))
+            else:
+                tokens.append((2, lowered))
+    return tokens
+
+
+def _maven_compare(version_a: str, version_b: str) -> int:
+    """-1/0/1 the way Maven's own ComparableVersion orders two version
+    strings, for the common case -- see _maven_tokenize's docstring for
+    exactly what's confirmed directly and what's simplified. Missing
+    trailing tokens are padded to match the *other* side's token type at
+    that position (a missing qualifier-position token pads as the
+    release/"" qualifier, rank 5; a missing numeric-position token pads
+    as 0) -- confirmed directly this reproduces real Maven's null-padding
+    rule (e.g. "5.3.4.RELEASE" == "5.3.4", "1.0" > "1.0-alpha").
+    """
+    tokens_a = _maven_tokenize(version_a)
+    tokens_b = _maven_tokenize(version_b)
+    for index in range(max(len(tokens_a), len(tokens_b))):
+        token_a = tokens_a[index] if index < len(tokens_a) else None
+        token_b = tokens_b[index] if index < len(tokens_b) else None
+        if token_a is None:
+            token_a = (1, 0) if token_b[0] == 1 else (0, 5)
+        if token_b is None:
+            token_b = (1, 0) if token_a[0] == 1 else (0, 5)
+        if token_a != token_b:
+            return -1 if token_a < token_b else 1
+    return 0
+
+
+def _maven_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using
+    _maven_compare. A bare version with no operator prefix is treated as
+    an exact match, mirroring the npm/cargo/go branches' identical
+    convention."""
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    comparison = _maven_compare(version, boundary)
+    if operator == ">=":
+        return comparison >= 0
+    if operator == "<=":
+        return comparison <= 0
+    if operator == ">":
+        return comparison > 0
+    if operator == "<":
+        return comparison < 0
+    return comparison == 0
+
+
+def _maven_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_maven_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -203,6 +305,9 @@ class VersionVulnerability:
 
         if ecosystem == "go":
             return self._is_current_version_vulnerable_go(version)
+
+        if ecosystem == "maven":
+            return self._is_current_version_vulnerable_maven(version)
 
         try:
             check_version = Version(version)
@@ -289,6 +394,26 @@ class VersionVulnerability:
                 if current_version < semver.Version.parse(_strip_go_version_prefix(self.fixed_in_version)):
                     return True
             except ValueError:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_maven(self, version: str) -> bool:
+        if not _MAVEN_TOKEN.findall(version.strip()):
+            return True  # No parseable version content at all, assume vulnerable -- mirrors the branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _maven_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                if _maven_compare(version, self.fixed_in_version) < 0:
+                    return True
+            except Exception:
                 pass
 
         return False

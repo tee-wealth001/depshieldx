@@ -42,7 +42,7 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
     # so it gets the same folding as PyPI.
     if ecosystem in ("pypi", "cargo"):
         return _normalize_pypi_name(name)
-    if ecosystem == "go":
+    if ecosystem in ("go", "maven"):
         # Go module paths are case-sensitive canonical identifiers
         # (confirmed directly against go.dev/ref/mod's module-path rules)
         # -- unlike every other ecosystem here, lowercasing would fold
@@ -50,6 +50,12 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
         # matching against external vulnerability sources, which document
         # their Go package-name field as the exact module path (see
         # go_registry.py's module docstring). Only whitespace is trimmed.
+        # Maven groupId/artifactId coordinates get the same treatment --
+        # Maven Central's own repository layout (registry.py's
+        # group_path()) is case-sensitive, and OSV/deps.dev/GitHub
+        # Advisories all key Maven entries by the exact "groupId:
+        # artifactId" coordinate (confirmed directly against real OSV
+        # query responses).
         return name.strip() if name else ""
     return name.strip().lower() if name else ""
 
@@ -71,6 +77,15 @@ def _strip_version_spec(target: str, ecosystem: str) -> str:
         # prefix to skip past, unlike npm's "@scope/name".
         at_index = target.find("@")
         return target[:at_index] if at_index != -1 else target
+    if ecosystem == "maven":
+        # "org.apache.commons:commons-lang3:3.17.0" ->
+        # "org.apache.commons:commons-lang3"; a bare "groupId:artifactId"
+        # target (no version) is returned unchanged -- Maven coordinates
+        # use ":" as both the groupId/artifactId separator and the
+        # artifactId/version separator, so (unlike cargo/go's "@") this
+        # can't just split on the first occurrence of the separator.
+        parts = target.split(":")
+        return ":".join(parts[:2]) if len(parts) >= 3 else target
     return target
 
 
@@ -84,13 +99,30 @@ def package_records(ecosystem: str, resolution: ResolutionResult) -> list[Packag
     for name, version in resolution.resolved_versions.items():
         artifacts = (resolution.selected_artifacts or {}).get(name) or []
         digest = (artifacts[0].get("digests") or {}).get("sha256") if artifacts else None
+        if ecosystem == "maven" and version:
+            # purl's Maven type uses "groupId" as the namespace segment and
+            # "artifactId" as the name segment (pkg:maven/namespace/name@
+            # version, confirmed directly against a real OSV response's
+            # own "purl" field) -- not the colon-joined "groupId:
+            # artifactId" coordinate depshieldx uses internally as `name`
+            # everywhere else in this module.
+            group_id, _, artifact_id = name.partition(":")
+            purl = f"pkg:maven/{group_id}/{artifact_id}@{version}"
+        else:
+            purl = f"pkg:{ecosystem}/{name}@{version}" if version else None
         records.append(
             PackageRecord(
                 ecosystem=ecosystem,
                 name=name,
                 version=version,
-                source={"pypi": "pypi.org", "npm": "npmjs.org", "cargo": "crates.io", "go": "pkg.go.dev"}.get(ecosystem),
-                purl=f"pkg:{ecosystem}/{name}@{version}" if version else None,
+                source={
+                    "pypi": "pypi.org",
+                    "npm": "npmjs.org",
+                    "cargo": "crates.io",
+                    "go": "pkg.go.dev",
+                    "maven": "repo1.maven.org",
+                }.get(ecosystem),
+                purl=purl,
                 digest=digest,
                 direct=_normalize_name_for_ecosystem(name, ecosystem) in direct_names,
             )

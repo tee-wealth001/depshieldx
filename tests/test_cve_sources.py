@@ -4,6 +4,9 @@ from depshieldx.intelligence.models import (
     VersionVulnerability,
     _cargo_satisfies,
     _cargo_satisfies_clause,
+    _maven_compare,
+    _maven_satisfies,
+    _maven_satisfies_clause,
     _npm_satisfies,
     _npm_satisfies_clause,
 )
@@ -23,6 +26,12 @@ class OsvEcosystemNamesTests(unittest.TestCase):
         # "time" crate's RUSTSEC-2026-0009 advisory only returns results
         # under ecosystem="crates.io", not "cargo" or "Cargo").
         self.assertEqual(OSV_ECOSYSTEM_NAMES["cargo"], "crates.io")
+
+    def test_maven_maps_to_osv_maven_identifier(self):
+        # Confirmed directly against the real OSV API (a real query for
+        # org.apache.logging.log4j:log4j-core only returns results under
+        # ecosystem="Maven").
+        self.assertEqual(OSV_ECOSYSTEM_NAMES["maven"], "Maven")
 
 
 class NpmSatisfiesClauseTests(unittest.TestCase):
@@ -103,6 +112,92 @@ class CargoSatisfiesClauseTests(unittest.TestCase):
         self.assertTrue(_cargo_satisfies("0.3.46", ">=0.3.6,<0.3.47"))
         self.assertFalse(_cargo_satisfies("0.3.47", ">=0.3.6,<0.3.47"))
         self.assertFalse(_cargo_satisfies("0.3.5", ">=0.3.6,<0.3.47"))
+
+
+class MavenCompareTests(unittest.TestCase):
+    """Unit coverage for the low-level Maven ComparableVersion-derived
+    comparator, independent of VersionVulnerability. Every case here was
+    verified directly against real Maven's own comparison tool
+    (`java -cp maven-artifact-*.jar
+    org.apache.maven.artifact.versioning.ComparableVersion <versions...>`),
+    not derived from the algorithm description alone -- see
+    models.py's _maven_tokenize docstring."""
+
+    def test_release_sorts_after_prerelease_qualifier(self):
+        self.assertEqual(_maven_compare("1.0", "1.0-alpha"), 1)
+
+    def test_numeric_extension_sorts_after_qualifier(self):
+        self.assertEqual(_maven_compare("1.0-alpha", "1.0.0"), -1)
+
+    def test_release_sorts_after_snapshot(self):
+        self.assertEqual(_maven_compare("1.0.0", "1.0-SNAPSHOT"), 1)
+
+    def test_snapshot_sorts_after_release_candidate(self):
+        self.assertEqual(_maven_compare("1.0-SNAPSHOT", "1.0-rc1"), 1)
+
+    def test_release_candidate_sorts_after_beta(self):
+        self.assertEqual(_maven_compare("1.0-rc1", "1.0-beta"), 1)
+
+    def test_major_version_number_wins_regardless_of_qualifier(self):
+        self.assertEqual(_maven_compare("1.0-beta", "2.0-alpha1"), -1)
+
+    def test_unrecognized_qualifier_sorts_after_release(self):
+        # Real Guava-style build-flavor suffix, not a Maven release qualifier.
+        self.assertEqual(_maven_compare("33.4.0-jre", "33.4.0"), 1)
+
+    def test_release_qualifier_aliases_are_equivalent_to_no_qualifier(self):
+        self.assertEqual(_maven_compare("5.3.4.RELEASE", "5.3.4"), 0)
+
+
+class MavenSatisfiesClauseTests(unittest.TestCase):
+    def test_gte_boundary(self):
+        self.assertTrue(_maven_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_maven_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_lt_boundary(self):
+        self.assertTrue(_maven_satisfies_clause("1.9.9", "<2.0.0"))
+        self.assertFalse(_maven_satisfies_clause("2.0.0", "<2.0.0"))
+
+    def test_bare_version_is_exact_match(self):
+        self.assertTrue(_maven_satisfies_clause("1.2.3", "1.2.3"))
+        self.assertFalse(_maven_satisfies_clause("1.2.4", "1.2.3"))
+
+    def test_maven_satisfies_ands_comma_separated_clauses(self):
+        self.assertTrue(_maven_satisfies("1.5.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_maven_satisfies("2.0.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_maven_satisfies("1.0.0", ">=1.2.3,<2.0.0"))
+
+    def test_real_log4j_core_range(self):
+        # Real range from OSV for org.apache.logging.log4j:log4j-core --
+        # confirmed directly against the live OSV API during development.
+        self.assertTrue(_maven_satisfies("2.0-alpha1", ">=2.0-alpha1,<2.25.4"))
+        self.assertTrue(_maven_satisfies("2.14.1", ">=2.0-alpha1,<2.25.4"))
+        self.assertFalse(_maven_satisfies("2.25.4", ">=2.0-alpha1,<2.25.4"))
+
+
+class VersionVulnerabilityMavenTests(unittest.TestCase):
+    def test_real_log4j_core_range(self):
+        vuln = VersionVulnerability(cve_id="GHSA-TEST-MAVEN-1", source="osv", affected_versions=[">=2.0-alpha1,<2.25.4"])
+        self.assertTrue(vuln.is_current_version_vulnerable("2.14.1", ecosystem="maven"))
+        self.assertFalse(vuln.is_current_version_vulnerable("2.25.4", ecosystem="maven"))
+
+    def test_fixed_in_version_uses_maven_ordering(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-MAVEN-2", source="osv", fixed_in_version="1.2.3")
+        self.assertTrue(vuln.is_current_version_vulnerable("1.2.2", ecosystem="maven"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.2.3", ecosystem="maven"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.5.0", ecosystem="maven"))
+
+    def test_release_qualifier_alias_treated_as_no_qualifier(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-MAVEN-3", source="osv", fixed_in_version="5.3.4")
+        self.assertFalse(vuln.is_current_version_vulnerable("5.3.4.RELEASE", ecosystem="maven"))
+
+    def test_version_outside_range_is_not_flagged(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-MAVEN-4", source="osv", affected_versions=[">=1.2.3,<2.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="maven"))
+
+    def test_unparseable_installed_version_assumes_vulnerable(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-MAVEN-5", source="osv", affected_versions=["<2.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="maven"))
 
 
 class VersionVulnerabilityNpmTests(unittest.TestCase):

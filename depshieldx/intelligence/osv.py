@@ -14,6 +14,7 @@ OSV_ECOSYSTEM_NAMES = {
     "npm": "npm",
     "cargo": "crates.io",
     "go": "Go",
+    "maven": "Maven",
 }
 
 

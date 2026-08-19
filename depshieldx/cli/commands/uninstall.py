@@ -11,7 +11,7 @@ from ..output import _echo_success, _stage_loader
 @click.option(
     "--ecosystem",
     "ecosystem_option",
-    type=click.Choice(["pypi", "npm", "cargo", "go"], case_sensitive=False),
+    type=click.Choice(["pypi", "npm", "cargo", "go", "maven"], case_sensitive=False),
     default=None,
     help="Ecosystem for bare package-name targets (ignored for --lockfile, which is auto-detected by filename). Defaults to pypi.",
 )
@@ -30,8 +30,23 @@ def uninstall(targets, requirement_file, lockfile, pyproject_file, ecosystem_opt
     if not uninstall_args:
         raise click.UsageError("Could not determine which packages to uninstall")
 
+    try:
+        uninstall_command = ecosystem.uninstall_command(uninstall_args)
+    except RuntimeError as exc:
+        # Mirrors direct_dependency_names_for_lockfile's own RuntimeError
+        # handling elsewhere in this flow -- an ecosystem can legitimately
+        # have no safe uninstall equivalent (e.g. Maven: `mvn
+        # dependency:get` only ever fetches into the local repository, it
+        # never edits a pom.xml the way `cargo remove`/`go get @none` edit
+        # their manifests, so there's nothing well-defined to reverse).
+        # Without this, that RuntimeError would otherwise propagate as a
+        # raw traceback -- nothing here previously caught exceptions
+        # raised from uninstall_command() itself, only from resolving
+        # which packages to pass to it.
+        raise click.UsageError(str(exc)) from exc
+
     with _stage_loader(f"Uninstalling packages for {input_source.label}...", verbose=verbose):
-        _run_cli_command(ecosystem.uninstall_command(uninstall_args), verbose=verbose)
+        _run_cli_command(uninstall_command, verbose=verbose)
     _echo_success("Uninstall completed.")
     if requirement_file:
         click.echo(f"Removed packages listed in {input_source.label}.")
