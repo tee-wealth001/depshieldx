@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>depshieldx – Secure Package Management for PyPI, npm, Cargo &amp; Go</title>
+  <title>depshieldx – Secure Package Management for PyPI, npm, Cargo, Go &amp; Maven</title>
   <meta
     name="description"
-    content="Safer package install and scan workflows for PyPI, npm/yarn/pnpm, Cargo/crates.io, and Go modules, with cryptographic provenance checks, CVE lookups, Docker plus Trivy deep mode with behavioral tracing, and signed receipts."
+    content="Safer package install and scan workflows for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, and Maven/Maven Central, with cryptographic provenance checks, CVE lookups, Docker plus Trivy deep mode with behavioral tracing, and signed receipts."
   />
   <style>
     * {
@@ -683,8 +683,8 @@
         <div class="hero-content">
           <div class="hero-text">
             <div class="badge">Security-First Package Management</div>
-            <h1>Install PyPI, npm, Cargo, and Go packages with confidence</h1>
-            <p>depshieldx adds a security gate in front of your package installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, and Go modules alike. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
+            <h1>Install PyPI, npm, Cargo, Go, and Maven packages with confidence</h1>
+            <p>depshieldx adds a security gate in front of your package installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, and Maven/Maven Central alike. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
             <div class="cta-buttons">
               <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
                 <span>Get Started</span>
@@ -732,10 +732,10 @@
           <div class="feature-card">
             <div class="feature-icon">🔍</div>
             <h3>Deep Dependency Analysis</h3>
-            <p>Resolves and checks your entire dependency tree, not just the package you're installing -- for PyPI, npm/yarn/pnpm, Cargo, or Go.</p>
+            <p>Resolves and checks your entire dependency tree, not just the package you're installing -- for PyPI, npm/yarn/pnpm, Cargo, Go, or Maven.</p>
             <ul>
               <li>Full resolved package versions</li>
-              <li>Cryptographic provenance for PyPI &amp; npm; structural checks for Cargo &amp; Go</li>
+              <li>Cryptographic provenance for PyPI, npm &amp; Maven; structural checks for Cargo &amp; Go</li>
               <li>Real Sigstore attestation verification</li>
             </ul>
           </div>
@@ -753,7 +753,7 @@
           <div class="feature-card">
             <div class="feature-icon">🐳</div>
             <h3>Docker Sandbox Testing</h3>
-            <p>Run installations in an isolated Docker environment before touching your system, for PyPI, npm/yarn/pnpm, Cargo, or Go.</p>
+            <p>Run installations in an isolated Docker environment before touching your system, for PyPI, npm/yarn/pnpm, Cargo, Go, or Maven.</p>
             <ul>
               <li>Real behavioral tracing of the install</li>
               <li>Trivy deep scanning</li>
@@ -773,12 +773,12 @@
           <div class="feature-card">
             <div class="feature-icon">🔄</div>
             <h3>Flexible Workflows</h3>
-            <p>Works with your existing dependency files and tools, across all four ecosystems.</p>
+            <p>Works with your existing dependency files and tools, across all five ecosystems.</p>
             <ul>
               <li>requirements.txt, uv.lock & pyproject.toml</li>
               <li>package-lock.json, yarn.lock & pnpm-lock.yaml</li>
               <li>Cargo.lock &amp; go.sum</li>
-              <li>Direct package names</li>
+              <li>Direct package names &amp; Maven coordinates</li>
             </ul>
           </div>
           <div class="feature-card">
@@ -834,7 +834,7 @@
           <div class="mode-card deep">
             <div class="mode-badge">DEEP MODE</div>
             <h3>🔒 Deep Mode</h3>
-            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system -- for PyPI, npm/yarn/pnpm, Cargo, or Go.</p>
+            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system -- for PyPI, npm/yarn/pnpm, Cargo, Go, or Maven.</p>
             <p style="font-size: 0.9rem; color: var(--text-muted);">Maximum security with full isolation and behavioral analysis.</p>
             <div class="code-example">depshieldx install requests --deep</div>
           </div>
@@ -872,6 +872,9 @@
             </div>
             <div class="command-item">
               <code>install github.com/pkg/errors --ecosystem go --deep</code>
+            </div>
+            <div class="command-item">
+              <code>install com.google.code.gson:gson --ecosystem maven --deep</code>
             </div>
           </div>
           <div class="command-card">
@@ -918,7 +921,7 @@
     <section class="cta-section">
       <div class="container">
         <h2>Ready to secure your packages?</h2>
-        <p>Join developers who are taking control of their supply chain security, for PyPI, npm, Cargo, and Go alike. Get started with depshieldx today.</p>
+        <p>Join developers who are taking control of their supply chain security, for PyPI, npm, Cargo, Go, and Maven alike. Get started with depshieldx today.</p>
         <div class="cta-buttons" style="justify-content: center;">
           <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
             View on GitHub
