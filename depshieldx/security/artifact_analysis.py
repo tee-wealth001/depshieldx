@@ -26,6 +26,14 @@ MAX_BINARY_SCAN_BYTES = 1_048_576
 # build-time script -- init() functions and //go:generate directives only
 # run during a real `go build`/`go generate`, not during `go mod download`
 # alone, and neither is a single agreed-upon filename the way build.rs is.
+# Maven jars need no TEXT_EXTENSIONS entry -- they contain compiled
+# .class bytecode, not text source, and real jars are plain zip archives
+# (confirmed directly), so only the top-level archive-suffix check below
+# needs ".jar" added, no new extraction code. Deliberately no Maven entry
+# in INSTALL_SCRIPT_NAMES either: like Go, Maven has no canonical,
+# always-executed build-time script that runs during plain dependency
+# resolution -- annotation processors only run during a real `mvn
+# compile`, not `dependency:resolve` alone.
 TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs", ".go"}
 INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json", "build.rs"}
 NATIVE_BINARY_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
@@ -534,7 +542,7 @@ def analyze_artifact(artifact_path: Path) -> List[StaticFinding]:
         findings.extend(_scan_binary(artifact_path.name, artifact_path.name, data))
         return findings
 
-    if artifact_path.suffix == ".whl" or artifact_path.suffix == ".zip":
+    if artifact_path.suffix in (".whl", ".zip", ".jar"):
         with zipfile.ZipFile(artifact_path) as archive:
             for member_name in _candidate_members(artifact_path.name, archive.namelist()):
                 if _is_native_binary(member_name):

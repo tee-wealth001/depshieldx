@@ -12,10 +12,12 @@ import zipfile
 from depshieldx.cache import CacheEntry
 from depshieldx.ecosystems.cargo import CARGO_ECOSYSTEM
 from depshieldx.ecosystems.go import GO_ECOSYSTEM
+from depshieldx.ecosystems.maven import MAVEN_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.sandbox import (
     CARGO_SANDBOX_IMAGE_TAG,
     GO_SANDBOX_IMAGE_TAG,
+    MAVEN_SANDBOX_IMAGE_TAG,
     NPM_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
@@ -25,6 +27,7 @@ from depshieldx.sandbox import (
     _docker_daemon_available,
     _ensure_cargo_sandbox_image,
     _ensure_go_sandbox_image,
+    _ensure_maven_sandbox_image,
     _ensure_npm_sandbox_image,
     _extract_report,
     _run_command,
@@ -33,6 +36,7 @@ from depshieldx.sandbox import (
     prepare_cargo_download_bundle,
     prepare_download_bundle,
     prepare_go_download_bundle,
+    prepare_maven_download_bundle,
     prepare_npm_download_bundle,
     run_sandbox,
 )
@@ -704,6 +708,269 @@ class GoSandboxTests(unittest.TestCase):
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/go-deep")
         self.assertIn(":/tmp/depshieldx-go-unused:rw", " ".join(docker_command))
+
+
+class MavenSandboxTests(unittest.TestCase):
+    _GSON_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.google.code.gson</groupId>
+    <artifactId>gson-parent</artifactId>
+    <version>2.11.0</version>
+  </parent>
+  <artifactId>gson</artifactId>
+</project>
+"""
+    _GSON_PARENT_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.google.code.gson</groupId>
+  <artifactId>gson-parent</artifactId>
+  <version>2.11.0</version>
+</project>
+"""
+    _COMMONS_LANG3_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.apache.commons</groupId>
+    <artifactId>commons-parent</artifactId>
+    <version>73</version>
+  </parent>
+  <artifactId>commons-lang3</artifactId>
+</project>
+"""
+    _COMMONS_PARENT_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.apache.commons</groupId>
+  <artifactId>commons-parent</artifactId>
+  <version>73</version>
+  <properties>
+    <commons.junit.version>5.11.0</commons.junit.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${commons.junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+"""
+    _JUNIT_BOM_POM = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.junit</groupId>
+  <artifactId>junit-bom</artifactId>
+  <version>5.11.0</version>
+</project>
+"""
+
+    def _fake_jar_bytes(self) -> bytes:
+        # A real, minimal, openable zip archive -- analyze_artifacts()
+        # opens every ".jar" as a real zip (jars are plain zip archives,
+        # confirmed directly), so arbitrary non-zip bytes correctly raise
+        # BadZipFile there rather than being silently accepted.
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+        return buffer.getvalue()
+
+    def _selected_entries(self, coordinate, version):
+        group_id, _, artifact_id = coordinate.partition(":")
+        artifact = {
+            "url": f"https://repo1.maven.org/maven2/x/{artifact_id}-{version}.jar",
+            "filename": f"{artifact_id}-{version}.jar",
+            "checksum_algorithm": "sha256",
+            "checksum": None,
+        }
+        return [(coordinate, version, artifact)]
+
+    @patch("depshieldx.sandbox.fetch_pom_text")
+    @patch.object(MAVEN_ECOSYSTEM, "fetch_artifact")
+    @patch.object(MAVEN_ECOSYSTEM, "selected_artifact_entries")
+    def test_prepare_maven_download_bundle_builds_m2_repo_layout_and_walks_parent_chain(
+        self, mock_entries, mock_fetch_artifact, mock_fetch_pom
+    ):
+        coordinate, version = "com.google.code.gson:gson", "2.11.0"
+        mock_entries.return_value = self._selected_entries(coordinate, version)
+
+        def _fake_fetch_artifact(artifact, destination):
+            path = Path(destination) / artifact["filename"]
+            path.write_bytes(self._fake_jar_bytes())
+            return path
+
+        mock_fetch_artifact.side_effect = _fake_fetch_artifact
+
+        def _fake_fetch_pom(group_id, artifact_id, pom_version):
+            if artifact_id == "gson":
+                return self._GSON_POM
+            if artifact_id == "gson-parent":
+                return self._GSON_PARENT_POM
+            raise AssertionError(f"unexpected pom fetch: {group_id}:{artifact_id}:{pom_version}")
+
+        mock_fetch_pom.side_effect = _fake_fetch_pom
+
+        bundle = prepare_maven_download_bundle(MAVEN_ECOSYSTEM, {coordinate: version})
+        try:
+            self.assertIn("com.google.code.gson_gson-2.11.0.jar", bundle.downloaded_files)
+            self.assertIn("pom.xml", bundle.downloaded_files)
+
+            jar_path = Path(bundle.temp_dir) / "m2-repo" / "com" / "google" / "code" / "gson" / "gson" / "2.11.0" / "gson-2.11.0.jar"
+            self.assertTrue(jar_path.exists())
+            pom_path = jar_path.with_suffix(".pom")
+            self.assertTrue(pom_path.exists())
+
+            # Parent chain: gson's own pom references gson-parent, which
+            # is never itself a resolved dependency -- confirmed directly
+            # this fails Maven's dependency collector if missing.
+            parent_pom_path = (
+                Path(bundle.temp_dir) / "m2-repo" / "com" / "google" / "code" / "gson" / "gson-parent" / "2.11.0" / "gson-parent-2.11.0.pom"
+            )
+            self.assertTrue(parent_pom_path.exists())
+
+            scratch_pom = (Path(bundle.temp_dir) / "pom.xml").read_text(encoding="utf-8")
+            self.assertIn("<groupId>com.google.code.gson</groupId>", scratch_pom)
+            self.assertIn("<artifactId>gson</artifactId>", scratch_pom)
+            self.assertIn("<version>2.11.0</version>", scratch_pom)
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox.fetch_pom_text")
+    @patch.object(MAVEN_ECOSYSTEM, "fetch_artifact")
+    @patch.object(MAVEN_ECOSYSTEM, "selected_artifact_entries")
+    def test_prepare_maven_download_bundle_walks_bom_import_with_property_version(
+        self, mock_entries, mock_fetch_artifact, mock_fetch_pom
+    ):
+        coordinate, version = "org.apache.commons:commons-lang3", "3.17.0"
+        mock_entries.return_value = self._selected_entries(coordinate, version)
+
+        def _fake_fetch_artifact(artifact, destination):
+            path = Path(destination) / artifact["filename"]
+            path.write_bytes(self._fake_jar_bytes())
+            return path
+
+        mock_fetch_artifact.side_effect = _fake_fetch_artifact
+
+        def _fake_fetch_pom(group_id, artifact_id, pom_version):
+            if artifact_id == "commons-lang3":
+                return self._COMMONS_LANG3_POM
+            if artifact_id == "commons-parent":
+                return self._COMMONS_PARENT_POM
+            if artifact_id == "junit-bom":
+                return self._JUNIT_BOM_POM
+            raise AssertionError(f"unexpected pom fetch: {group_id}:{artifact_id}:{pom_version}")
+
+        mock_fetch_pom.side_effect = _fake_fetch_pom
+
+        bundle = prepare_maven_download_bundle(MAVEN_ECOSYSTEM, {coordinate: version})
+        try:
+            # The BOM import's version is a "${commons.junit.version}"
+            # placeholder in commons-parent's own pom, resolved against
+            # that same pom's <properties> block (real, confirmed
+            # directly for this exact example) -- not a literal "5.11.0"
+            # anywhere in commons-lang3's or commons-parent's own text.
+            bom_pom_path = (
+                Path(bundle.temp_dir) / "m2-repo" / "org" / "junit" / "junit-bom" / "5.11.0" / "junit-bom-5.11.0.pom"
+            )
+            self.assertTrue(bom_pom_path.exists())
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_maven_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_maven_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_maven_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_maven_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(MAVEN_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("maven_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_maven_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_maven_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_maven_image_and_maven_wrapper_for_maven_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/maven-deep",
+            downloaded_files=["com.google.code.gson_gson-2.11.0.jar", "pom.xml"],
+            artifact_hashes={"com.google.code.gson_gson-2.11.0.jar": "abc"},
+            requirements_path="/tmp/maven-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"download_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"com.google.code.gson:gson": "2.11.0"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=MAVEN_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(MAVEN_ECOSYSTEM, {"com.google.code.gson:gson": "2.11.0"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(MAVEN_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_maven.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("com.google.code.gson:gson@2.11.0", docker_command)
+        self.assertIn(
+            "/tmp/depshieldx-maven-work:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for Maven -- the
+        # m2-repo/pom.xml layout was already built host-side, so Trivy
+        # scans the bundle directory directly instead of the (unused,
+        # empty) bind-mounted install dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/maven-deep")
+        self.assertIn(":/tmp/depshieldx-maven-unused:rw", " ".join(docker_command))
 
 
 class EvidenceCollectorTests(unittest.TestCase):

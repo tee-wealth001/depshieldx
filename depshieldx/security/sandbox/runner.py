@@ -23,6 +23,13 @@ from ...ecosystems.go.registry import (
     hash1_of_go_mod,
     hash1_of_zip,
 )
+from ...ecosystems.maven.ecosystem import _build_scratch_pom
+from ...ecosystems.maven.registry import (
+    fetch_pom_text,
+    group_path,
+    parse_bom_import_coordinates,
+    parse_parent_coordinate,
+)
 from ...core.resolver import ResolutionResult
 from ...core.runtime import pip_command, resource_path, system_python_executable
 from ..trivy import scan_filesystem
@@ -47,6 +54,13 @@ CARGO_SANDBOX_IMAGE_TAG = "depshieldx-cargo-sandbox:rust1"
 # in its base layer (confirmed directly), though the Dockerfile still
 # installs it explicitly for robustness, matching the other two images.
 GO_SANDBOX_IMAGE_TAG = "depshieldx-go-sandbox:go1"
+# Same reasoning as GO_SANDBOX_IMAGE_TAG -- built locally from
+# security/sandbox/docker/maven_sandbox.Dockerfile (maven:3-eclipse-
+# temurin-21 + strace + python3, both confirmed missing from the base
+# image, plus a build-time-only pre-warmed plugin cache -- see that
+# Dockerfile's own docstring for why Maven's sandbox needs one and
+# cargo/go's don't).
+MAVEN_SANDBOX_IMAGE_TAG = "depshieldx-maven-sandbox:maven3"
 SANDBOX_USER = "65534:65534"
 
 
@@ -288,6 +302,31 @@ def _ensure_go_sandbox_image(verbose: bool = False) -> None:
         str(dockerfile),
         "-t",
         GO_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
+def _ensure_maven_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's maven:3-eclipse-temurin-21 + strace + python3 +
+    pre-warmed plugin cache image if it isn't already present locally.
+    Mirrors _ensure_go_sandbox_image exactly."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", MAVEN_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("security/sandbox/docker/maven_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        MAVEN_SANDBOX_IMAGE_TAG,
         str(dockerfile.parent),
     ]
     _run_command(build_command, verbose=verbose)
@@ -603,6 +642,153 @@ def prepare_go_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> 
         raise
 
 
+def prepare_maven_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """Maven's counterpart to prepare_go_download_bundle -- downloads (and,
+    via fetch_artifact, checksum-verifies) every resolved coordinate's real
+    .jar and fetches its real .pom on the host, laying both out host-side
+    exactly as a real Maven local repository expects (<group-path>/
+    <artifactId>/<version>/<artifactId>-<version>.{jar,pom}), so the
+    sandboxed `mvn --offline dependency:resolve`
+    (sandbox_wrapper_maven.py) can resolve entirely offline via
+    -Dmaven.repo.local=... -- confirmed directly against a real Docker
+    container under this project's full isolation posture (--network
+    none, --read-only, --cap-drop ALL, non-root user).
+
+    Also recursively walks and fetches every resolved artifact's real
+    <parent> POM chain AND every <dependencyManagement> BOM import
+    (registry.py's parse_parent_coordinate/parse_bom_import_coordinates),
+    writing those into the same repository layout (POM only -- neither is
+    a real jar: parent POMs are metadata-only inheritance, BOM imports are
+    packaging=pom dependency-version catalogs). Confirmed directly both
+    are required, not optional: Maven's dependency collector fails
+    outright on a missing parent POM or BOM import even when the child
+    artifact's own jar+pom are both present and correct -- two real
+    examples confirmed directly: com.google.errorprone:error_prone_
+    annotations:2.27.0's parent (error_prone_parent:2.27.0), and org.
+    apache.commons:commons-lang3:3.17.0's parent chain importing org.
+    junit:junit-bom as dependency-management (neither is ever itself a
+    `dependency:list` entry). Every fetched POM is itself walked the same
+    way (a BOM can have its own parent; a parent can itself import
+    further BOMs), with a shared `fetched` set for cycle-safety and to
+    avoid re-fetching. Fetched over plain HTTPS without a separate
+    checksum/Sigstore re-verification pass -- they're pure XML build-graph
+    metadata (no executable code), unlike the actual installable jars
+    Stage 1's provenance check already covers; TLS already gives
+    transport integrity for that narrower purpose.
+
+    Real, accepted coverage gap (see parse_bom_import_coordinates'
+    docstring): a BOM import's version is sometimes a "${property}"
+    placeholder resolved only against that same POM's own <properties>
+    block, not the fuller cross-file property-inheritance Maven's real
+    resolver supports. An unresolvable entry is skipped rather than
+    guessed at -- if it turns out to be genuinely required, the sandboxed
+    `mvn --offline` step still fails with a clear, real Maven error naming
+    exactly what's missing (verified directly: this is what happens today
+    for that exact case), not a silently wrong resolution.
+
+    Also writes a scratch pom.xml (every resolved coordinate as a direct
+    dependency, reusing ecosystems/maven/ecosystem.py's own
+    _build_scratch_pom -- same "pin everything, not just the requested
+    targets" reasoning as prepare_cargo_download_bundle/
+    prepare_go_download_bundle) for the sandboxed dependency:resolve to
+    run against.
+
+    Every downloaded .jar is also copied flat into temp_dir's root (group-
+    id-prefixed to avoid same-artifactId-different-group collisions,
+    e.g. "com.example_widget-1.0.0.jar") so analyze_artifacts() finds it
+    the same way it already finds .whl/.crate/.zip files -- real jars are
+    plain zip archives (confirmed directly), so the existing generic
+    zip-extraction branch in artifact_analysis.py only needs ".jar" added
+    to the top-level archive-suffix check, no new extraction code.
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        m2_repo = Path(temp_dir) / "m2-repo"
+        fetched_metadata_poms: set[tuple[str, str, str]] = set()
+
+        def _write_pom(group_id: str, artifact_id: str, version: str, pom_text: str) -> Path:
+            entry_dir = m2_repo / group_path(group_id) / artifact_id / version
+            entry_dir.mkdir(parents=True, exist_ok=True)
+            pom_path = entry_dir / f"{artifact_id}-{version}.pom"
+            pom_path.write_bytes(pom_text.encode("utf-8"))
+            return entry_dir
+
+        def _fetch_pom_metadata_chain(pom_text: str) -> None:
+            # Both directions -- <parent> inheritance and <dependencyManagement>
+            # BOM imports -- can each lead to further POMs needing the same
+            # treatment (a BOM can have its own parent; a parent can itself
+            # import further BOMs), so every newly-fetched POM's text is
+            # walked the same way, not just the top-level artifact's.
+            candidates = list(parse_bom_import_coordinates(pom_text))
+            parent = parse_parent_coordinate(pom_text)
+            if parent is not None:
+                candidates.append(parent)
+
+            for group_id, artifact_id, version in candidates:
+                if (group_id, artifact_id, version) in fetched_metadata_poms:
+                    continue
+                fetched_metadata_poms.add((group_id, artifact_id, version))
+                try:
+                    metadata_pom_text = fetch_pom_text(group_id, artifact_id, version)
+                except Exception:
+                    # See module docstring: an unresolvable BOM/parent
+                    # reference (e.g. a property that isn't defined
+                    # locally) is skipped rather than crashing bundle
+                    # prep -- the sandboxed offline resolve step still
+                    # fails with a clear, real error if it turns out to
+                    # have been required.
+                    continue
+                _write_pom(group_id, artifact_id, version, metadata_pom_text)
+                _fetch_pom_metadata_chain(metadata_pom_text)
+
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        resolved_coordinates: List[tuple[str, str, str]] = []
+        for coordinate, version, artifact in ecosystem.selected_artifact_entries(resolution):
+            group_id, _, artifact_id = coordinate.partition(":")
+            resolved_coordinates.append((group_id, artifact_id, version))
+
+            entry_dir = m2_repo / group_path(group_id) / artifact_id / version
+            entry_dir.mkdir(parents=True, exist_ok=True)
+            ecosystem.fetch_artifact(artifact, entry_dir)
+
+            pom_text = fetch_pom_text(group_id, artifact_id, version)
+            (entry_dir / f"{artifact_id}-{version}.pom").write_bytes(pom_text.encode("utf-8"))
+
+            flat_name = f"{group_id}_{artifact_id}-{version}.jar"
+            (Path(temp_dir) / flat_name).write_bytes((entry_dir / f"{artifact_id}-{version}.jar").read_bytes())
+
+            fetched_metadata_poms.add((group_id, artifact_id, version))
+            _fetch_pom_metadata_chain(pom_text)
+
+        pom_path = Path(temp_dir) / "pom.xml"
+        pom_path.write_bytes(_build_scratch_pom(resolved_coordinates).encode("utf-8"))
+
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -664,10 +850,13 @@ def run_sandbox(
     is_npm = ecosystem.name == "npm"
     is_cargo = ecosystem.name == "cargo"
     is_go = ecosystem.name == "go"
+    is_maven = ecosystem.name == "maven"
     docker_image = (
         NPM_SANDBOX_IMAGE_TAG
         if is_npm
-        else CARGO_SANDBOX_IMAGE_TAG if is_cargo else GO_SANDBOX_IMAGE_TAG if is_go else DOCKER_IMAGE
+        else CARGO_SANDBOX_IMAGE_TAG
+        if is_cargo
+        else GO_SANDBOX_IMAGE_TAG if is_go else MAVEN_SANDBOX_IMAGE_TAG if is_maven else DOCKER_IMAGE
     )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
@@ -724,6 +913,8 @@ def run_sandbox(
             bundle = prepare_cargo_download_bundle(ecosystem, resolved_versions or {})
         elif is_go:
             bundle = prepare_go_download_bundle(ecosystem, resolved_versions or {})
+        elif is_maven:
+            bundle = prepare_maven_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -929,6 +1120,52 @@ def run_sandbox(
                 ]
                 env_args = ["-e", "HOME=/tmp"]
                 _ensure_go_sandbox_image(verbose=verbose)
+            elif is_maven:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_maven.py",
+                    "/tmp/packages",
+                    *[f"{name}@{version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('security/sandbox/sandbox_wrapper_maven.py').parent}:/depshieldx:ro"
+                # prepare_maven_download_bundle already built the m2-repo/
+                # pom.xml layout host-side, before the container ever
+                # runs. sandbox_wrapper_maven.py copies it (merged with
+                # the image's own pre-warmed plugin cache) into its own
+                # writable tmpfs work directory rather than resolving
+                # directly against the read-only bind mount -- confirmed
+                # directly Maven writes small bookkeeping files into
+                # whatever -Dmaven.repo.local path it's given regardless
+                # of whether real work is needed, which fails outright
+                # against a real read-only mount. So, like cargo/go,
+                # there's no new output that needs to survive tmpfs
+                # teardown via a bind-mounted install dir: host_install_dir/
+                # container_install_path stay unused for Maven, and Trivy
+                # scans the host-side bundle directory directly (already
+                # bind-mounted read-only at /tmp/packages, since
+                # bundle.temp_dir itself is mounted there) -- Trivy's own
+                # Java/Maven support reads a real m2-repo-shaped local
+                # repository natively, needing no extracted source tree.
+                container_install_path = "/tmp/depshieldx-maven-unused"
+                host_scan_subpath = None
+                scan_base_dir = bundle.temp_dir
+                # sandbox_wrapper_maven.py's merged local repository (and
+                # jansi's native-library extraction, see that file's
+                # docstring) both need a writable, exec-permitted
+                # location separate from the shared noexec outer /tmp --
+                # same auto-created-root-owned-parent reasoning as the
+                # other three ecosystems' extra mounts. 256m: the merged
+                # local repo (pre-warmed plugin cache + per-run project
+                # coordinates) is small in practice (confirmed directly,
+                # under 20MB for the plugin cache alone) but sized to
+                # match cargo/go's own build-stage tmpfs rather than
+                # tuned to the single case observed.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-maven-work:rw,nosuid,nodev,exec,size=256m",
+                ]
+                env_args = ["-e", "HOME=/tmp"]
+                _ensure_maven_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",

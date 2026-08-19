@@ -7,6 +7,8 @@ from depshieldx.ecosystems.maven.registry import (
     artifact_directory_url,
     check_provenance_batch,
     group_path,
+    parse_bom_import_coordinates,
+    parse_parent_coordinate,
 )
 
 
@@ -71,6 +73,134 @@ class CheckProvenanceBatchTests(unittest.TestCase):
         )
 
 
+class ParseParentCoordinateTests(unittest.TestCase):
+    def test_extracts_real_parent_coordinate(self):
+        # Real shape confirmed directly against gson-2.11.0.pom.
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.google.code.gson</groupId>
+    <artifactId>gson-parent</artifactId>
+    <version>2.11.0</version>
+  </parent>
+  <artifactId>gson</artifactId>
+</project>
+"""
+        self.assertEqual(
+            parse_parent_coordinate(pom_text),
+            ("com.google.code.gson", "gson-parent", "2.11.0"),
+        )
+
+    def test_returns_none_when_no_parent(self):
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.junit</groupId>
+  <artifactId>junit-bom</artifactId>
+  <version>5.11.0</version>
+</project>
+"""
+        self.assertIsNone(parse_parent_coordinate(pom_text))
+
+
+class ParseBomImportCoordinatesTests(unittest.TestCase):
+    def test_extracts_real_bom_import_with_literal_version(self):
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>5.11.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+"""
+        self.assertEqual(
+            parse_bom_import_coordinates(pom_text),
+            [("org.junit", "junit-bom", "5.11.0")],
+        )
+
+    def test_resolves_property_placeholder_version_from_same_pom(self):
+        # Real shape confirmed directly against commons-parent:73's pom --
+        # the BOM's own <version> is "${commons.junit.version}", defined
+        # in that same pom's <properties> block, not a literal string.
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <properties>
+    <commons.junit.version>5.11.0</commons.junit.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${commons.junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+"""
+        self.assertEqual(
+            parse_bom_import_coordinates(pom_text),
+            [("org.junit", "junit-bom", "5.11.0")],
+        )
+
+    def test_skips_entry_with_unresolvable_property(self):
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${not.defined.anywhere}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+"""
+        self.assertEqual(parse_bom_import_coordinates(pom_text), [])
+
+    def test_ignores_non_import_dependency_management_entries(self):
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>example-lib</artifactId>
+        <version>1.0.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+"""
+        self.assertEqual(parse_bom_import_coordinates(pom_text), [])
+
+    def test_no_dependency_management_returns_empty_list(self):
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>gson</artifactId>
+</project>
+"""
+        self.assertEqual(parse_bom_import_coordinates(pom_text), [])
+
+
 @pytest.mark.live
 class MavenRegistryLiveTests(unittest.TestCase):
     """Hits the real repo1.maven.org and search.maven.org. Marked live --
@@ -111,6 +241,23 @@ class MavenRegistryLiveTests(unittest.TestCase):
 
         self.assertIsNotNone(version)
         self.assertRegex(version, r"^\d+\.\d+")
+
+    def test_parse_parent_coordinate_against_real_gson_pom(self):
+        from depshieldx.ecosystems.maven.registry import fetch_pom_text
+
+        pom_text = fetch_pom_text("com.google.code.gson", "gson", "2.11.0")
+
+        self.assertEqual(
+            parse_parent_coordinate(pom_text),
+            ("com.google.code.gson", "gson-parent", "2.11.0"),
+        )
+
+    def test_parse_bom_import_coordinates_against_real_commons_parent_pom(self):
+        from depshieldx.ecosystems.maven.registry import fetch_pom_text
+
+        pom_text = fetch_pom_text("org.apache.commons", "commons-parent", "73")
+
+        self.assertIn(("org.junit", "junit-bom", "5.11.0"), parse_bom_import_coordinates(pom_text))
 
 
 if __name__ == "__main__":
