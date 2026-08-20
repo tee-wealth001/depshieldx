@@ -70,6 +70,20 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(env, dict(os.environ))
         self.assertIsNot(env, os.environ)
 
+    # Fake path segments deliberately use forward slashes and no drive
+    # letter/colon, on every platform including Windows -- confirmed
+    # directly this is what broke the first version of these tests on
+    # real Linux/macOS CI runners: os.pathsep is ":" there, which
+    # collides with a Windows-style "C:\\..." drive-letter colon and
+    # mangles a hardcoded Windows path joined with it. subprocess_env()
+    # itself doesn't care what a path segment looks like, only whether
+    # two *whole* segments match after os.path.normcase(os.path.normpath(
+    # ...)) -- these fake segments exercise that without accidentally
+    # depending on which platform the test itself happens to run on.
+    FAKE_MEIPASS = "/fake/meipass"
+    FAKE_TOOL_A = "/fake/real/tool"
+    FAKE_TOOL_B = "/fake/another/real/tool"
+
     @patch("depshieldx.runtime.sys")
     @patch("depshieldx.runtime.is_frozen", return_value=True)
     def test_subprocess_env_frozen_without_meipass_attribute_is_unchanged(self, _mock_frozen, mock_sys):
@@ -78,7 +92,7 @@ class RuntimeTests(unittest.TestCase):
         # than assumed.
         del mock_sys._MEIPASS
         mock_sys._MEIPASS = None
-        fake_path = f"C:\\real\\tool{os.pathsep}C:\\another\\real\\tool"
+        fake_path = os.pathsep.join([self.FAKE_TOOL_A, self.FAKE_TOOL_B])
         with patch.dict(os.environ, {"PATH": fake_path}, clear=False):
             env = subprocess_env()
             self.assertEqual(env["PATH"], os.environ["PATH"])
@@ -91,27 +105,39 @@ class RuntimeTests(unittest.TestCase):
         # bug (composer -> php.exe resolving depshieldx's own bundled
         # VCRUNTIME140.dll instead of its real one) -- see this module's
         # own docstring.
-        meipass = "C:\\Users\\steph\\AppData\\Local\\Temp\\_MEI123456"
-        mock_sys._MEIPASS = meipass
-        fake_path = os.pathsep.join([meipass, "C:\\real\\tool", "C:\\another\\real\\tool"])
+        mock_sys._MEIPASS = self.FAKE_MEIPASS
+        fake_path = os.pathsep.join([self.FAKE_MEIPASS, self.FAKE_TOOL_A, self.FAKE_TOOL_B])
         with patch.dict(os.environ, {"PATH": fake_path}, clear=False):
             env = subprocess_env()
         path_entries = env["PATH"].split(os.pathsep)
-        self.assertNotIn(meipass, path_entries)
-        self.assertIn("C:\\real\\tool", path_entries)
-        self.assertIn("C:\\another\\real\\tool", path_entries)
+        self.assertNotIn(self.FAKE_MEIPASS, path_entries)
+        self.assertIn(self.FAKE_TOOL_A, path_entries)
+        self.assertIn(self.FAKE_TOOL_B, path_entries)
 
     @patch("depshieldx.runtime.sys")
     @patch("depshieldx.runtime.is_frozen", return_value=True)
-    def test_subprocess_env_strips_meipass_regardless_of_trailing_slash_or_case(self, _mock_frozen, mock_sys):
-        # os.path.normcase(os.path.normpath(...)) is required, not
-        # cosmetic -- confirmed directly PATH entries and sys._MEIPASS
-        # don't always agree on a trailing separator or (on Windows)
-        # letter case.
+    def test_subprocess_env_strips_meipass_regardless_of_trailing_slash(self, _mock_frozen, mock_sys):
+        # os.path.normpath(...) is required, not cosmetic -- confirmed
+        # directly a real _MEIPASS and the matching PATH entry don't
+        # always agree on a trailing separator.
+        mock_sys._MEIPASS = self.FAKE_MEIPASS
+        fake_path = os.pathsep.join([self.FAKE_MEIPASS + "/", self.FAKE_TOOL_A])
+        with patch.dict(os.environ, {"PATH": fake_path}, clear=False):
+            env = subprocess_env()
+        self.assertEqual(env["PATH"], self.FAKE_TOOL_A)
+
+    @unittest.skipUnless(sys.platform == "win32", "case-insensitive path comparison is Windows-specific")
+    @patch("depshieldx.runtime.sys")
+    @patch("depshieldx.runtime.is_frozen", return_value=True)
+    def test_subprocess_env_strips_meipass_regardless_of_case_on_windows(self, _mock_frozen, mock_sys):
+        # os.path.normcase(...) is required, not cosmetic -- confirmed
+        # directly a real _MEIPASS and the matching PATH entry don't
+        # always agree on letter case on Windows, where paths are
+        # case-insensitive (os.path.normcase is a no-op on POSIX, so this
+        # is genuinely platform-specific, not a portable property of
+        # subprocess_env() itself).
         mock_sys._MEIPASS = "C:\\Users\\steph\\AppData\\Local\\Temp\\_MEI123456"
-        fake_path = os.pathsep.join(
-            ["c:\\users\\steph\\appdata\\local\\temp\\_mei123456\\", "C:\\real\\tool"]
-        )
+        fake_path = os.pathsep.join(["c:\\users\\steph\\appdata\\local\\temp\\_mei123456", "C:\\real\\tool"])
         with patch.dict(os.environ, {"PATH": fake_path}, clear=False):
             env = subprocess_env()
         self.assertEqual(env["PATH"], "C:\\real\\tool")
@@ -119,8 +145,8 @@ class RuntimeTests(unittest.TestCase):
     @patch("depshieldx.runtime.sys")
     @patch("depshieldx.runtime.is_frozen", return_value=True)
     def test_subprocess_env_frozen_without_meipass_in_path_is_unchanged(self, _mock_frozen, mock_sys):
-        mock_sys._MEIPASS = "C:\\Users\\steph\\AppData\\Local\\Temp\\_MEI123456"
-        fake_path = os.pathsep.join(["C:\\real\\tool", "C:\\another\\real\\tool"])
+        mock_sys._MEIPASS = self.FAKE_MEIPASS
+        fake_path = os.pathsep.join([self.FAKE_TOOL_A, self.FAKE_TOOL_B])
         with patch.dict(os.environ, {"PATH": fake_path}, clear=False):
             env = subprocess_env()
         self.assertEqual(env["PATH"], fake_path)
@@ -128,9 +154,8 @@ class RuntimeTests(unittest.TestCase):
     @patch("depshieldx.runtime.sys")
     @patch("depshieldx.runtime.is_frozen", return_value=True)
     def test_subprocess_env_does_not_mutate_os_environ(self, _mock_frozen, mock_sys):
-        meipass = "C:\\Users\\steph\\AppData\\Local\\Temp\\_MEI123456"
-        mock_sys._MEIPASS = meipass
-        fake_path = os.pathsep.join([meipass, "C:\\real\\tool"])
+        mock_sys._MEIPASS = self.FAKE_MEIPASS
+        fake_path = os.pathsep.join([self.FAKE_MEIPASS, self.FAKE_TOOL_A])
         with patch.dict(os.environ, {"PATH": fake_path}, clear=False):
             subprocess_env()
             self.assertEqual(os.environ["PATH"], fake_path)
