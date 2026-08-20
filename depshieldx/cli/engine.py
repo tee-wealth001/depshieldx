@@ -133,34 +133,47 @@ def _uninstall_args_for_input_source(input_source, ecosystem):
     if input_source.source_type == "requirements":
         return input_source.pip_args[:]
 
-    if input_source.source_type == "lockfile" and ecosystem.name in ("npm", "cargo", "go", "nuget", "pub", "rubygems"):
+    if input_source.source_type == "lockfile" and ecosystem.name in (
+        "npm",
+        "cargo",
+        "go",
+        "nuget",
+        "pub",
+        "rubygems",
+        "composer",
+    ):
         # npm/yarn/pnpm, Cargo, go.sum, packages.lock.json, pubspec.lock,
-        # and Gemfile.lock lockfiles pass their raw path through as the
-        # sole requested target (each ecosystem's resolve() reads the
-        # lockfile/its sibling manifest directly) -- unlike uv.lock,
-        # which is pre-parsed into name==version strings by
-        # input_sources.py, so this only applies to ecosystems whose own
-        # adapter reads the lockfile itself. packages.lock.json's own
+        # Gemfile.lock, and composer.lock lockfiles pass their raw path
+        # through as the sole requested target (each ecosystem's
+        # resolve() reads the lockfile/its sibling manifest directly) --
+        # unlike uv.lock, which is pre-parsed into name==version strings
+        # by input_sources.py, so this only applies to ecosystems whose
+        # own adapter reads the lockfile itself. packages.lock.json's own
         # "type": "Direct" field, pubspec.lock's own "dependency":
         # "direct ..." field, and Gemfile.lock's own "DEPENDENCIES"
-        # section all make this self-contained, no sibling manifest read
-        # needed the way Cargo.toml/go.mod are for their own ecosystems.
+        # section all make those three self-contained, no sibling
+        # manifest read needed -- Cargo.lock/go.sum/composer.lock are the
+        # exception among these, needing their own sibling Cargo.toml/
+        # go.mod/composer.json read instead, same as the ecosystems
+        # below.
         return ecosystem.direct_dependency_names_for_lockfile(input_source.requested_targets[0])
 
     package_names = []
     seen = set()
     for target in input_source.requested_targets:
-        if ecosystem.name in ("npm", "cargo", "go", "maven", "nuget", "pub", "rubygems"):
+        if ecosystem.name in ("npm", "cargo", "go", "maven", "nuget", "pub", "rubygems", "composer"):
             # _package_name_from_requirement is PyPI-shaped (name==version,
             # name[extra]) and actively rejects anything containing "/",
             # which would break scoped npm packages like "@babel/core" --
-            # and every Go module path (e.g. "github.com/pkg/errors").
-            # npm's/cargo's/go's own "name@version" stripping already
-            # exists in ecosystems/base.py and handles this correctly per
+            # and every Go module path (e.g. "github.com/pkg/errors") --
+            # and every Composer "vendor/package" coordinate. npm's/
+            # cargo's/go's own "name@version" stripping already exists in
+            # ecosystems/base.py and handles this correctly per
             # ecosystem. Maven coordinates ("groupId:artifactId:version"),
             # NuGet's "PackageId@version", Pub's "package_name@version",
-            # and RubyGems' "gem_name@version" targets get the same
-            # treatment for the same reason.
+            # RubyGems' "gem_name@version", and Composer's "vendor/
+            # package@version" targets get the same treatment for the
+            # same reason.
             package_name = _strip_version_spec(target, ecosystem.name).strip()
         else:
             package_name = _package_name_from_requirement(target) or target.strip()

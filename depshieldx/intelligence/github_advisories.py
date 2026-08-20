@@ -23,6 +23,7 @@ GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
     "nuget": "nuget",
     "pub": "pub",
     "rubygems": "rubygems",
+    "composer": "composer",
 }
 
 

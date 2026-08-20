@@ -18,6 +18,7 @@ OSV_ECOSYSTEM_NAMES = {
     "nuget": "NuGet",
     "pub": "Pub",
     "rubygems": "RubyGems",
+    "composer": "Packagist",
 }
 
 

@@ -104,7 +104,7 @@ class CliNpmDispatchTests(unittest.TestCase):
 
     def test_install_rejects_invalid_ecosystem_choice(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["install", "left-pad", "--ecosystem", "composer"])
+        result = runner.invoke(cli, ["install", "left-pad", "--ecosystem", "nonexistent-ecosystem"])
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Invalid value", result.output)

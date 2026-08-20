@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import re
 import subprocess
 
 import click
@@ -7,6 +8,7 @@ import click
 from ...ecosystems import (
     resolve_bundle_tool,
     resolve_cargo_tool,
+    resolve_composer_tool,
     resolve_dart_tool,
     resolve_dotnet_tool,
     resolve_go_tool,
@@ -387,6 +389,69 @@ def route_bundle(bundle_args):
     raise SystemExit(result.returncode)
 
 
+_COMPOSER_EXACT_VERSION_SHAPE = re.compile(r"^v?\d[\w.\-]*$")
+
+
+def _extract_simple_composer_require_targets(args):
+    # Mirrors _extract_simple_cargo_add_targets/_extract_simple_go_get_
+    # targets: only intercept a bare "composer require <target...>" with
+    # no other flags. Unlike RubyGems' `bundle add` (one shared --version
+    # across every named gem in a call), a real `composer require
+    # pkg1:v1 pkg2:v2 ...` accepts any number of independently-versioned
+    # targets in one call (confirmed directly, see ecosystems/composer/
+    # ecosystem.py's module docstring), so this mirrors cargo/go's
+    # multi-target shim shape, not RubyGems' single-vs-multi split.
+    #
+    # depshieldx's own "name@version" target convention always means an
+    # *exact* pin, everywhere else in this codebase -- but Composer's own
+    # "name:constraint" require syntax accepts arbitrary version
+    # constraints (caret/tilde ranges, "||"-separated alternatives,
+    # branch aliases like "dev-main", ...), not just exact versions. A
+    # colon-target whose constraint doesn't look like a plain exact
+    # version bails out entirely rather than risk silently
+    # misrepresenting a real range as an exact pin -- the same "don't
+    # risk misinterpreting a real shape" caution NuGet's/Pub's own
+    # extractors already use for their own edge cases.
+    if not args or args[0] != "require":
+        return None
+    remaining = args[1:]
+    targets = [arg for arg in remaining if not arg.startswith("-")]
+    if not targets or len(targets) != len(remaining):
+        return None
+
+    depshieldx_targets = []
+    for target in targets:
+        name, sep, version = target.partition(":")
+        if not sep:
+            depshieldx_targets.append(name)
+            continue
+        if not _COMPOSER_EXACT_VERSION_SHAPE.match(version):
+            return None
+        depshieldx_targets.append(f"{name}@{version}")
+    return depshieldx_targets
+
+
+@click.argument("composer_args", nargs=-1, type=click.UNPROCESSED)
+def route_composer(composer_args):
+    """Internal helper used by the optional composer shim."""
+    args = list(composer_args)
+    package_targets = _extract_simple_composer_require_targets(args)
+    if package_targets:
+        click.echo("Routing composer require through depshieldx...")
+        command = self_invoke_command(["install", *package_targets, "--ecosystem", "composer"])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        "depshieldx routing only intercepts a plain 'composer require <vendor/package[:version]>...' "
+        "with no other flags and only exact version constraints. Passing through to composer.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_composer_tool("composer"), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
 def register(cli):
     cli.add_command(routing)
     cli.command("route-pip", hidden=True, context_settings={"ignore_unknown_options": True})(route_pip)
@@ -398,3 +463,4 @@ def register(cli):
     cli.command("route-dotnet", hidden=True, context_settings={"ignore_unknown_options": True})(route_dotnet)
     cli.command("route-dart", hidden=True, context_settings={"ignore_unknown_options": True})(route_dart)
     cli.command("route-bundle", hidden=True, context_settings={"ignore_unknown_options": True})(route_bundle)
+    cli.command("route-composer", hidden=True, context_settings={"ignore_unknown_options": True})(route_composer)

@@ -82,6 +82,16 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
         # casing (confirmed directly against real query responses), so
         # they get the same "preserve, don't fold" treatment.
         return name.strip() if name else ""
+    # Composer/Packagist package names fall through to here deliberately
+    # (not a special case above): confirmed directly Packagist's own
+    # lookup is case-insensitive but its canonical form is always
+    # lowercase ("Monolog/Monolog" and "monolog/monolog" both resolve to
+    # the same real package, always reported back as lowercase), and
+    # OSV's own Packagist-ecosystem matching is confirmed directly case-
+    # *sensitive* on that lowercase form -- the same "the registry's own
+    # canonical form already IS case-folded" situation PyPI/Cargo have,
+    # not the "case genuinely matters, preserve it" one Go/Maven/NuGet/
+    # Pub/RubyGems have.
     return name.strip().lower() if name else ""
 
 
@@ -96,12 +106,15 @@ def _strip_version_spec(target: str, ecosystem: str) -> str:
         search_from = 1 if target.startswith("@") else 0
         at_index = target.find("@", search_from)
         return target[:at_index] if at_index != -1 else target
-    if ecosystem in ("cargo", "go", "nuget", "pub", "rubygems"):
+    if ecosystem in ("cargo", "go", "nuget", "pub", "rubygems", "composer"):
         # "serde@=1.0.219" -> "serde"; "github.com/pkg/errors@v0.9.1" ->
         # "github.com/pkg/errors"; "Newtonsoft.Json@13.0.3" ->
         # "Newtonsoft.Json"; "http@1.6.0" -> "http"; "rack@3.2.7" ->
-        # "rack" -- crate/module/package/gem names have no scoping prefix
-        # to skip past, unlike npm's "@scope/name".
+        # "rack"; "monolog/monolog@3.10.0" -> "monolog/monolog" --
+        # crate/module/package/gem/composer-package names have no
+        # scoping prefix to skip past, unlike npm's "@scope/name" (a
+        # Composer "vendor/package" coordinate's own "/" never collides
+        # with the "@version" separator).
         at_index = target.find("@")
         return target[:at_index] if at_index != -1 else target
     if ecosystem == "maven":
@@ -151,6 +164,7 @@ def package_records(ecosystem: str, resolution: ResolutionResult) -> list[Packag
                     "nuget": "nuget.org",
                     "pub": "pub.dev",
                     "rubygems": "rubygems.org",
+                    "composer": "packagist.org",
                 }.get(ecosystem),
                 purl=purl,
                 digest=digest,

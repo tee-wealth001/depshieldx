@@ -8,6 +8,7 @@ GO_LOCKFILE_NAMES = {"go.sum"}
 NUGET_LOCKFILE_NAMES = {"packages.lock.json"}
 PUB_LOCKFILE_NAMES = {"pubspec.lock"}
 RUBYGEMS_LOCKFILE_NAMES = {"Gemfile.lock"}
+COMPOSER_LOCKFILE_NAMES = {"composer.lock"}
 
 
 @dataclass
@@ -155,6 +156,21 @@ def load_input_source(
                 requested_targets=[lockfile],
                 pip_args=[],
                 ecosystem="rubygems",
+            )
+        if lockfile_name in COMPOSER_LOCKFILE_NAMES:
+            # ComposerEcosystem.resolve() parses composer.lock directly.
+            # Unlike Gemfile.lock/pubspec.lock/packages.lock.json,
+            # composer.lock alone doesn't distinguish direct from
+            # transitive dependencies (confirmed directly: no per-entry
+            # marker exists) -- direct_dependency_names_for_lockfile
+            # reads the sibling composer.json for that, the same "need
+            # the sibling manifest" case Cargo.lock/go.sum already are.
+            return InputSource(
+                source_type="lockfile",
+                label=lockfile_name,
+                requested_targets=[lockfile],
+                pip_args=[],
+                ecosystem="composer",
             )
         if lockfile_name == "uv.lock":
             requested_targets = _parse_uv_lock(lockfile)

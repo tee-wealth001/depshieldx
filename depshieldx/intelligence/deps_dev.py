@@ -80,13 +80,14 @@ def fetch_deps_dev_insights(
     packages: list[str], resolved_versions: dict[str, str] | None = None, ecosystem: str = "pypi"
 ) -> dict:
     if ecosystem not in DEPS_DEV_SYSTEM_NAMES:
-        # deps.dev has no Pub system at all (confirmed directly against
-        # docs.deps.dev/api/v3's supported systems list: GO, RUBYGEMS,
-        # NPM, CARGO, MAVEN, PYPI, NUGET -- no Pub). The DEPS_DEV_SYSTEM_
-        # NAMES.get(ecosystem, "pypi") pattern below would otherwise
-        # silently query deps.dev's *PyPI* system using a Pub package's
-        # name, which isn't "no results" so much as "meaningless
-        # results" -- skip explicitly instead of risking that.
+        # deps.dev has no Pub or Composer system at all (confirmed
+        # directly against docs.deps.dev/api/v3's supported systems
+        # list: GO, RUBYGEMS, NPM, CARGO, MAVEN, PYPI, NUGET -- no Pub,
+        # no Composer/PHP). The DEPS_DEV_SYSTEM_NAMES.get(ecosystem,
+        # "pypi") pattern below would otherwise silently query deps.dev's
+        # *PyPI* system using a Pub/Composer package's name, which isn't
+        # "no results" so much as "meaningless results" -- skip
+        # explicitly instead of risking that.
         return {"hits": [], "warnings": [], "source": "deps_dev"}
 
     normalized_versions = {
