@@ -17,6 +17,7 @@ from .nuget import NUGET_ECOSYSTEM, NuGetEcosystem, resolve_dotnet_tool
 from .pub import PUB_ECOSYSTEM, PubEcosystem, resolve_dart_tool
 from .pypi import PYPI_ECOSYSTEM, PyPiEcosystem
 from .registry import ECOSYSTEMS, ecosystem_for_name
+from .rubygems import RUBYGEMS_ECOSYSTEM, RubyGemsEcosystem, resolve_bundle_tool
 
 __all__ = [
     "Ecosystem",
@@ -42,6 +43,9 @@ __all__ = [
     "PUB_ECOSYSTEM",
     "PubEcosystem",
     "resolve_dart_tool",
+    "RUBYGEMS_ECOSYSTEM",
+    "RubyGemsEcosystem",
+    "resolve_bundle_tool",
     "ECOSYSTEMS",
     "ecosystem_for_name",
 ]

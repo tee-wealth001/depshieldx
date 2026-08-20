@@ -10,6 +10,7 @@ from .npm import NPM_ECOSYSTEM
 from .nuget import NUGET_ECOSYSTEM
 from .pub import PUB_ECOSYSTEM
 from .pypi import PYPI_ECOSYSTEM
+from .rubygems import RUBYGEMS_ECOSYSTEM
 
 ECOSYSTEMS: dict[str, Ecosystem] = {
     PYPI_ECOSYSTEM.name: PYPI_ECOSYSTEM,
@@ -19,6 +20,7 @@ ECOSYSTEMS: dict[str, Ecosystem] = {
     MAVEN_ECOSYSTEM.name: MAVEN_ECOSYSTEM,
     NUGET_ECOSYSTEM.name: NUGET_ECOSYSTEM,
     PUB_ECOSYSTEM.name: PUB_ECOSYSTEM,
+    RUBYGEMS_ECOSYSTEM.name: RUBYGEMS_ECOSYSTEM,
 }
 
 

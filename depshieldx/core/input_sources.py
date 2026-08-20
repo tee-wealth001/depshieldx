@@ -7,6 +7,7 @@ CARGO_LOCKFILE_NAMES = {"Cargo.lock"}
 GO_LOCKFILE_NAMES = {"go.sum"}
 NUGET_LOCKFILE_NAMES = {"packages.lock.json"}
 PUB_LOCKFILE_NAMES = {"pubspec.lock"}
+RUBYGEMS_LOCKFILE_NAMES = {"Gemfile.lock"}
 
 
 @dataclass
@@ -141,6 +142,19 @@ def load_input_source(
                 requested_targets=[lockfile],
                 pip_args=[],
                 ecosystem="pub",
+            )
+        if lockfile_name in RUBYGEMS_LOCKFILE_NAMES:
+            # RubyGemsEcosystem.resolve() parses Gemfile.lock directly
+            # (unlike Cargo.lock/go.sum, it's self-contained -- no
+            # sibling Gemfile read needed, the resolved "GEM specs:"
+            # block and the "DEPENDENCIES" section's own direct-vs-
+            # transitive distinction both live in the lockfile itself).
+            return InputSource(
+                source_type="lockfile",
+                label=lockfile_name,
+                requested_targets=[lockfile],
+                pip_args=[],
+                ecosystem="rubygems",
             )
         if lockfile_name == "uv.lock":
             requested_targets = _parse_uv_lock(lockfile)

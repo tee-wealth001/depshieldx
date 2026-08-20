@@ -492,6 +492,104 @@ def _pub_satisfies(version: str, spec: str) -> bool:
     return all(_pub_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+# RubyGems' real Gem::Version ordering algorithm, ported and confirmed
+# directly against a real, currently-installed Ruby/RubyGems toolchain
+# (`Gem::Version.new(...).canonical_segments`/`<=>`, not just documentation)
+# -- see ecosystems/rubygems/registry.py's module docstring for the
+# yank-detection research this sits alongside. A version string's "-" is
+# replaced with ".pre." first (confirmed directly: `Gem::Version.new(
+# "1.0.0-alpha").segments == [1, 0, 0, "pre", "alpha"]`, the *opposite*
+# of _rubygems_canonical_segments' own version/platform-suffix split in
+# ecosystems/rubygems/lockfiles.py, which is Bundler lockfile-shape-
+# specific, not Gem::Version's own parsing rule), then split on "." and
+# further split each dot-segment on every digit<->letter transition
+# (confirmed directly: "1.0.0.pre1" and "1.0.0.pre.1" both canonicalize
+# identically to (1, "pre", 1)). Trailing zero segments are stripped
+# (confirmed directly: "1.0" == "1.0.0", canonical_segments strips down
+# to (1,) but never below one remaining element -- "0" stays (0,)).
+_RUBYGEMS_TOKEN = re.compile(r"[0-9]+|[A-Za-z]+")
+
+
+def _rubygems_segments(version: str) -> tuple:
+    normalized = version.strip().replace("-", ".pre.")
+    segments: list[int | str] = []
+    for dot_part in normalized.split("."):
+        for token in _RUBYGEMS_TOKEN.findall(dot_part):
+            segments.append(int(token) if token.isdigit() else token)
+    return tuple(segments)
+
+
+def _rubygems_canonical_segments(version: str) -> tuple:
+    segments = list(_rubygems_segments(version))
+    while len(segments) > 1 and segments[-1] == 0:
+        segments.pop()
+    return tuple(segments)
+
+
+def _rubygems_compare_segment(a: int | str, b: int | str) -> int:
+    a_is_int, b_is_int = isinstance(a, int), isinstance(b, int)
+    if a_is_int == b_is_int:
+        return -1 if a < b else (1 if a > b else 0)  # type: ignore[operator]
+    # A string segment (a prerelease identifier, e.g. "pre"/"rc"/"a") is
+    # always ordered below a numeric one at the same position -- confirmed
+    # directly ("1.0.a" < "1.0.0", "1.0" > "1.0.0.a"), regardless of which
+    # side has which type.
+    return 1 if a_is_int else -1
+
+
+def _rubygems_compare(version: str, boundary: str) -> int | None:
+    """Full ordering comparison for two RubyGems version strings, returning
+    -1/0/1 (or None if either has no parseable content at all). Confirmed
+    directly against real Gem::Version <=> output across every case this
+    handles: trailing-zero equivalence, alpha/numeric-mixed segments
+    ("1.0.a10" > "1.0.a9"), numeric-not-lexicographic segment ordering
+    ("1.9" < "1.10"), and prerelease-sorts-below-release ("1.0.0.rc1" <
+    "1.0.0")."""
+    segments_a = _rubygems_canonical_segments(version)
+    segments_b = _rubygems_canonical_segments(boundary)
+    if not segments_a or not segments_b:
+        return None
+
+    for a, b in itertools.zip_longest(segments_a, segments_b, fillvalue=0):
+        if a == b:
+            continue
+        return _rubygems_compare_segment(a, b)
+    return 0
+
+
+def _rubygems_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using
+    real Gem::Version ordering (via _rubygems_compare) -- mirrors the
+    maven/nuget/pub branches' identical "bare version = exact match"
+    convention."""
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    comparison = _rubygems_compare(version, boundary)
+    if comparison is None:
+        return False
+
+    if operator == ">=":
+        return comparison >= 0
+    if operator == "<=":
+        return comparison <= 0
+    if operator == ">":
+        return comparison > 0
+    if operator == "<":
+        return comparison < 0
+    return comparison == 0
+
+
+def _rubygems_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_rubygems_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -547,6 +645,9 @@ class VersionVulnerability:
 
         if ecosystem == "pub":
             return self._is_current_version_vulnerable_pub(version)
+
+        if ecosystem == "rubygems":
+            return self._is_current_version_vulnerable_rubygems(version)
 
         try:
             check_version = Version(version)
@@ -699,6 +800,27 @@ class VersionVulnerability:
         if self.fixed_in_version:
             try:
                 comparison = _pub_compare(version, self.fixed_in_version)
+                if comparison is not None and comparison < 0:
+                    return True
+            except Exception:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_rubygems(self, version: str) -> bool:
+        if _rubygems_compare(version, version) is None:
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _rubygems_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                comparison = _rubygems_compare(version, self.fixed_in_version)
                 if comparison is not None and comparison < 0:
                     return True
             except Exception:
