@@ -14,6 +14,7 @@ from .go import GO_ECOSYSTEM, GoEcosystem, resolve_go_tool
 from .maven import MAVEN_ECOSYSTEM, MavenEcosystem, resolve_maven_tool
 from .npm import NPM_ECOSYSTEM, NpmEcosystem, resolve_node_tool
 from .nuget import NUGET_ECOSYSTEM, NuGetEcosystem, resolve_dotnet_tool
+from .pub import PUB_ECOSYSTEM, PubEcosystem, resolve_dart_tool
 from .pypi import PYPI_ECOSYSTEM, PyPiEcosystem
 from .registry import ECOSYSTEMS, ecosystem_for_name
 
@@ -38,6 +39,9 @@ __all__ = [
     "NUGET_ECOSYSTEM",
     "NuGetEcosystem",
     "resolve_dotnet_tool",
+    "PUB_ECOSYSTEM",
+    "PubEcosystem",
+    "resolve_dart_tool",
     "ECOSYSTEMS",
     "ecosystem_for_name",
 ]

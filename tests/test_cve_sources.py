@@ -13,6 +13,9 @@ from depshieldx.intelligence.models import (
     _nuget_compare,
     _nuget_satisfies,
     _nuget_satisfies_clause,
+    _pub_compare,
+    _pub_satisfies,
+    _pub_satisfies_clause,
 )
 from depshieldx.intelligence.osv import OSV_ECOSYSTEM_NAMES
 
@@ -320,6 +323,77 @@ class VersionVulnerabilityNuGetTests(unittest.TestCase):
     def test_unparseable_installed_version_assumes_vulnerable(self):
         vuln = VersionVulnerability(cve_id="CVE-TEST-NUGET-3", source="osv", affected_versions=["<2.0.0"])
         self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="nuget"))
+
+
+class PubCompareTests(unittest.TestCase):
+    """Confirmed directly against pub_semver's own Version.compareTo/
+    _compareLists source -- Dart's build-metadata ordering deliberately
+    differs from strict SemVer 2.0.0, which Python's semver library
+    follows by default (see _pub_compare's own docstring)."""
+
+    def test_prerelease_ordering_matches_standard_semver(self):
+        self.assertEqual(_pub_compare("2.0.0-beta", "2.0.0"), -1)
+        self.assertEqual(_pub_compare("1.0.0-alpha", "1.0.0-beta"), -1)
+
+    def test_build_metadata_breaks_a_tie_strict_semver_would_call_equal(self):
+        self.assertEqual(_pub_compare("1.2.3+1", "1.2.3+2"), -1)
+        self.assertEqual(_pub_compare("1.2.3+2", "1.2.3+1"), 1)
+        self.assertEqual(_pub_compare("1.2.3+1", "1.2.3+1"), 0)
+
+    def test_no_build_is_lower_than_has_build_the_opposite_of_prerelease(self):
+        # Confirmed directly: pub_semver's own comment is literally
+        # "Builds always come after no build string" -- the reverse of
+        # "no prerelease beats has prerelease".
+        self.assertEqual(_pub_compare("1.2.3", "1.2.3+1"), -1)
+        self.assertEqual(_pub_compare("1.2.3+1", "1.2.3"), 1)
+
+    def test_build_identifiers_compare_numerically_not_lexically(self):
+        self.assertEqual(_pub_compare("1.2.3+10", "1.2.3+9"), 1)
+
+    def test_major_minor_patch_takes_precedence_over_build(self):
+        self.assertEqual(_pub_compare("1.0.1+0", "1.0.0+99"), 1)
+
+    def test_satisfies_clause_uses_pub_ordering(self):
+        self.assertTrue(_pub_satisfies_clause("1.2.3+2", ">1.2.3+1"))
+        self.assertFalse(_pub_satisfies_clause("1.2.3+1", ">1.2.3+1"))
+
+    def test_unparseable_version_returns_none_not_a_crash(self):
+        self.assertIsNone(_pub_compare("not-a-version", "1.0.0"))
+
+
+class PubSatisfiesClauseTests(unittest.TestCase):
+    def test_gte_boundary(self):
+        self.assertTrue(_pub_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_pub_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_lt_boundary(self):
+        self.assertTrue(_pub_satisfies_clause("1.9.9", "<2.0.0"))
+        self.assertFalse(_pub_satisfies_clause("2.0.0", "<2.0.0"))
+
+    def test_bare_version_is_exact_match(self):
+        self.assertTrue(_pub_satisfies_clause("1.2.3", "1.2.3"))
+        self.assertFalse(_pub_satisfies_clause("1.2.4", "1.2.3"))
+
+    def test_pub_satisfies_ands_comma_separated_clauses(self):
+        self.assertTrue(_pub_satisfies("1.5.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_pub_satisfies("2.0.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_pub_satisfies("1.0.0", ">=1.2.3,<2.0.0"))
+
+
+class VersionVulnerabilityPubTests(unittest.TestCase):
+    def test_fixed_in_version_uses_pub_ordering(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-PUB-1", source="osv", fixed_in_version="1.2.3")
+        self.assertTrue(vuln.is_current_version_vulnerable("1.2.2", ecosystem="pub"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.2.3", ecosystem="pub"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.5.0", ecosystem="pub"))
+
+    def test_version_outside_range_is_not_flagged(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-PUB-2", source="osv", affected_versions=[">=1.2.3,<2.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="pub"))
+
+    def test_unparseable_installed_version_assumes_vulnerable(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-PUB-3", source="osv", affected_versions=["<2.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="pub"))
 
 
 class VersionVulnerabilityNpmTests(unittest.TestCase):

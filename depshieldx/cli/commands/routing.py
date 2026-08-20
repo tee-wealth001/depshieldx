@@ -4,7 +4,7 @@ import subprocess
 
 import click
 
-from ...ecosystems import resolve_cargo_tool, resolve_dotnet_tool, resolve_go_tool, resolve_node_tool
+from ...ecosystems import resolve_cargo_tool, resolve_dart_tool, resolve_dotnet_tool, resolve_go_tool, resolve_node_tool
 from ...core.routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
 from ...core.runtime import pip_command, self_invoke_command
 from ..engine import _show_routing_enabled_message
@@ -272,6 +272,45 @@ def route_dotnet(dotnet_args):
     raise SystemExit(result.returncode)
 
 
+def _extract_simple_dart_pub_add_targets(args):
+    # Mirrors _extract_simple_cargo_add_targets/_extract_simple_go_get_
+    # targets: only intercept a bare "dart pub add <package...>" with no
+    # other flags. Unlike `dotnet add package` (confirmed directly to
+    # accept only one package per invocation), `dart pub add foo bar`
+    # accepts any number of packages in one call (confirmed directly --
+    # see ecosystems/pub/ecosystem.py's module docstring), so this
+    # mirrors cargo/go's multi-target shim shape, not NuGet's
+    # single-target one.
+    if len(args) < 2 or args[0] != "pub" or args[1] != "add":
+        return None
+    remaining = args[2:]
+    targets = [arg for arg in remaining if not arg.startswith("-")]
+    if not targets or len(targets) != len(remaining):
+        return None
+    return targets
+
+
+@click.argument("dart_args", nargs=-1, type=click.UNPROCESSED)
+def route_dart(dart_args):
+    """Internal helper used by the optional dart shim."""
+    args = list(dart_args)
+    package_targets = _extract_simple_dart_pub_add_targets(args)
+    if package_targets:
+        click.echo("Routing dart pub add through depshieldx...")
+        command = self_invoke_command(["install", *package_targets, "--ecosystem", "pub"])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        "depshieldx routing only intercepts a plain 'dart pub add <package...>' with no other flags. "
+        "Passing through to dart.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_dart_tool("dart"), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
 def register(cli):
     cli.add_command(routing)
     cli.command("route-pip", hidden=True, context_settings={"ignore_unknown_options": True})(route_pip)
@@ -281,3 +320,4 @@ def register(cli):
     cli.command("route-cargo", hidden=True, context_settings={"ignore_unknown_options": True})(route_cargo)
     cli.command("route-go", hidden=True, context_settings={"ignore_unknown_options": True})(route_go)
     cli.command("route-dotnet", hidden=True, context_settings={"ignore_unknown_options": True})(route_dotnet)
+    cli.command("route-dart", hidden=True, context_settings={"ignore_unknown_options": True})(route_dart)

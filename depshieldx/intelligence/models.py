@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 from typing import List, Optional
 
@@ -387,6 +388,110 @@ def _nuget_satisfies(version: str, spec: str) -> bool:
     return all(_nuget_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+def _pub_identifier_parts(text: str) -> tuple:
+    """Splits a dot-separated prerelease/build string into parts, each an
+    int where the part is all-digits, else the original string --
+    confirmed directly against pub_semver's own _splitParts. Used for
+    build-metadata comparison; prerelease comparison itself is handled
+    correctly by semver.Version.compare() already (Dart's prerelease
+    semantics ARE standard SemVer 2.0.0, only its build-metadata handling
+    isn't)."""
+    if not text:
+        return ()
+    return tuple(int(part) if part.isdigit() else part for part in text.split("."))
+
+
+def _pub_compare_identifier_lists(a: tuple, b: tuple) -> int:
+    """Mirrors pub_semver's Version._compareLists exactly (confirmed
+    directly against its source, which cites "Rule 12 of the Semantic
+    Versioning spec v2.0.0-rc.1"): missing parts sort lower than present
+    ones, numeric identifiers sort lower than alphanumeric ones and
+    compare numerically among themselves, alphanumeric identifiers
+    compare lexically."""
+    for a_part, b_part in itertools.zip_longest(a, b):
+        if a_part == b_part:
+            continue
+        if a_part is None:
+            return -1
+        if b_part is None:
+            return 1
+        a_is_num = isinstance(a_part, int)
+        b_is_num = isinstance(b_part, int)
+        if a_is_num and b_is_num:
+            return -1 if a_part < b_part else 1
+        if a_is_num:
+            return -1
+        if b_is_num:
+            return 1
+        return -1 if str(a_part) < str(b_part) else 1
+    return 0
+
+
+def _pub_compare(version: str, boundary: str) -> int | None:
+    """Full ordering comparison for two Pub version strings, returning
+    -1/0/1 (or None if either fails to parse). Dart versions ARE valid
+    SemVer 2.0.0 syntax, so semver.Version.parse()/compare() already
+    handles major/minor/patch/prerelease precedence correctly -- but
+    pub_semver deliberately makes build metadata *significant* for
+    ordering, unlike strict SemVer 2.0.0 (which excludes it from
+    precedence entirely, the same rule NuGet's 4th-segment revision has
+    to work around above). Confirmed directly against pub_semver's own
+    Version.compareTo source: "Builds always come after no build
+    string" -- the *opposite* convention from prerelease's "no
+    prerelease beats has prerelease" -- and, when both sides have build
+    metadata, compared with the same identifier-list rules as
+    prerelease."""
+    try:
+        current = semver.Version.parse(version)
+        target = semver.Version.parse(boundary)
+    except ValueError:
+        return None
+
+    base_comparison = current.compare(target)
+    if base_comparison != 0:
+        return base_comparison
+
+    current_build = current.build
+    target_build = target.build
+    if not current_build and target_build:
+        return -1
+    if not target_build and current_build:
+        return 1
+    return _pub_compare_identifier_lists(_pub_identifier_parts(current_build), _pub_identifier_parts(target_build))
+
+
+def _pub_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using
+    real Pub ordering (via _pub_compare) -- mirrors the nuget/cargo/go
+    branches' identical "bare version = exact match" convention."""
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    comparison = _pub_compare(version, boundary)
+    if comparison is None:
+        return False
+
+    if operator == ">=":
+        return comparison >= 0
+    if operator == "<=":
+        return comparison <= 0
+    if operator == ">":
+        return comparison > 0
+    if operator == "<":
+        return comparison < 0
+    return comparison == 0
+
+
+def _pub_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_pub_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -439,6 +544,9 @@ class VersionVulnerability:
 
         if ecosystem == "nuget":
             return self._is_current_version_vulnerable_nuget(version)
+
+        if ecosystem == "pub":
+            return self._is_current_version_vulnerable_pub(version)
 
         try:
             check_version = Version(version)
@@ -567,6 +675,33 @@ class VersionVulnerability:
                 if current_version < semver.Version.parse(_normalize_nuget_version(self.fixed_in_version)):
                     return True
             except ValueError:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_pub(self, version: str) -> bool:
+        # Deliberately not a raw semver.Version comparison the way cargo's
+        # branch above is -- Dart's pub_semver considers build metadata
+        # significant for ordering (confirmed directly against its own
+        # source), which strict SemVer 2.0.0 (and so Python's semver
+        # library's default <) explicitly does not. _pub_compare is the
+        # real comparison engine; see its own docstring.
+        if _pub_compare(version, version) is None:
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _pub_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                comparison = _pub_compare(version, self.fixed_in_version)
+                if comparison is not None and comparison < 0:
+                    return True
+            except Exception:
                 pass
 
         return False
