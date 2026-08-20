@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/depshieldx.svg)](https://pypi.org/project/depshieldx/)
 [![Docs](https://img.shields.io/badge/docs-github%20pages-10b981)](https://tee-wealth001.github.io/depshieldx/)
 
-`depshieldx` is a safer wrapper around package install and scan workflows, for PyPI (Python), npm/yarn/pnpm (JavaScript), Cargo/crates.io (Rust), Go modules, Maven/Maven Central (Java), NuGet/NuGet.org (.NET), and Pub/pub.dev (Dart/Flutter) -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), [Maven / Maven Central Support](#maven--maven-central-support), [NuGet Support](#nuget-support), and [Pub Support](#pub-support) for the ecosystem-specific details.
+`depshieldx` is a safer wrapper around package install and scan workflows, for PyPI (Python), npm/yarn/pnpm (JavaScript), Cargo/crates.io (Rust), Go modules, Maven/Maven Central (Java), NuGet/NuGet.org (.NET), Pub/pub.dev (Dart/Flutter), and RubyGems/rubygems.org (Ruby) -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), [Maven / Maven Central Support](#maven--maven-central-support), [NuGet Support](#nuget-support), [Pub Support](#pub-support), and [RubyGems Support](#rubygems-support) for the ecosystem-specific details.
 
 Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and can optionally run a deeper Docker + Trivy validation path with real behavioral tracing of the sandboxed install. Every completed install or scan also writes signed local receipt JSON files.
 
@@ -34,6 +34,7 @@ That said, `depshieldx` doesn't reimplement `pip` or `npm` -- it wraps the real 
 - Using it against **Maven/Maven Central** packages only requires a Java + Maven toolchain (`mvn`) on the host -- no Python needed at all, in either distribution.
 - Using it against **NuGet/NuGet.org** packages only requires a .NET SDK (`dotnet`) on the host -- no Python needed at all, in either distribution.
 - Using it against **Pub/pub.dev** packages only requires a Dart SDK (`dart`) on the host -- no Python needed at all, in either distribution. Only the standalone Dart SDK is needed, not the full Flutter SDK.
+- Using it against **RubyGems/rubygems.org** packages only requires Ruby with Bundler (`bundle`) on the host -- no Python needed at all, in either distribution. Bundler ships as a default gem on modern Ruby installs.
 - **Deep mode**, for any ecosystem, additionally requires Docker.
 
 Project links:
@@ -44,14 +45,14 @@ Project links:
 
 ## What It Does
 
-- resolves the full dependency set before installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, or Pub/pub.dev
-- checks provenance for the selected release artifacts (PyPI attestations, or npm's SLSA provenance attestations -- both verified cryptographically via real Sigstore bundle verification, not just presence checks; crates.io and Go modules have no equivalent per-package attestation infrastructure, so Cargo and Go packages get structural checks instead -- yanked/retracted-release status, registry metadata -- rather than cryptographic verification. Go's checksums are still verified cryptographically, just transparently inside the `go` toolchain itself, not as a separate `depshieldx` step. Maven combines checksum + structural PGP-presence checks with real cryptographic Sigstore verification where a publisher has opted in, since January 2025. NuGet combines a real cryptographic checksum check against the registry's own published hash with structural repository-signature presence -- NuGet.org has no Sigstore equivalent, but it does unconditionally repository-sign every package with an X.509/Authenticode signature. Pub combines a real cryptographic checksum check against pub.dev's own published hash with structural discontinued/retracted-status checks -- pub.dev has no signing scheme of its own at all)
+- resolves the full dependency set before installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, or RubyGems/rubygems.org
+- checks provenance for the selected release artifacts (PyPI attestations, or npm's SLSA provenance attestations -- both verified cryptographically via real Sigstore bundle verification, not just presence checks; crates.io and Go modules have no equivalent per-package attestation infrastructure, so Cargo and Go packages get structural checks instead -- yanked/retracted-release status, registry metadata -- rather than cryptographic verification. Go's checksums are still verified cryptographically, just transparently inside the `go` toolchain itself, not as a separate `depshieldx` step. Maven combines checksum + structural PGP-presence checks with real cryptographic Sigstore verification where a publisher has opted in, since January 2025. NuGet combines a real cryptographic checksum check against the registry's own published hash with structural repository-signature presence -- NuGet.org has no Sigstore equivalent, but it does unconditionally repository-sign every package with an X.509/Authenticode signature. Pub combines a real cryptographic checksum check against pub.dev's own published hash with structural discontinued/retracted-status checks -- pub.dev has no signing scheme of its own at all. RubyGems combines a real cryptographic checksum check against rubygems.org's own published hash with a structural yank signal -- rubygems.org has no default, always-present signing scheme either)
 - queries 4 vulnerability sources for the resolved package versions:
   - OSV
   - GitHub Advisories
   - CISA KEV
   - deps.dev
-- supports a deeper Docker + Trivy scan mode, plus real syscall-level behavioral tracing during sandboxed installs, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, and Pub/pub.dev
+- supports a deeper Docker + Trivy scan mode, plus real syscall-level behavioral tracing during sandboxed installs, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, and RubyGems/rubygems.org
 - writes signed local receipts for installs and scans
 
 ## Quick Start
@@ -121,7 +122,7 @@ Windows support is improving, but macOS and Linux still have the broadest day-to
 
 Plain `install` and plain `scan` default to `fast`.
 
-`deep` is supported for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, and Pub/pub.dev input.
+`deep` is supported for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, and RubyGems/rubygems.org input.
 
 ### Fast mode
 
@@ -144,7 +145,7 @@ Deep mode does everything in fast mode first, then:
 
 For `install --deep`, the host install only happens after the fast checks and the Docker + Trivy stage both pass.
 
-`depshieldx` shells out to the local `pip` (or, for npm, the local `npm`; for Cargo, the local `cargo`; for Go, the local `go`; for Maven, the local `mvn`; for NuGet, the local `dotnet`; for Pub, the local `dart`) for resolution, download, and host install steps, so keeping those tools up to date is part of the security model.
+`depshieldx` shells out to the local `pip` (or, for npm, the local `npm`; for Cargo, the local `cargo`; for Go, the local `go`; for Maven, the local `mvn`; for NuGet, the local `dotnet`; for Pub, the local `dart`; for RubyGems, the local `bundle`) for resolution, download, and host install steps, so keeping those tools up to date is part of the security model.
 
 For PyPI, deep mode also traces filesystem writes, subprocess launches, and network access in-process during the sandboxed install (via `sys.addaudithook`) and actively blocks disallowed ones in real time. For npm, which has no equivalent in-process hook, behavioral tracing instead wraps the sandboxed `npm install` in `strace`, observing the same categories of activity across the whole install (including lifecycle scripts) rather than blocking individual syscalls live -- filesystem/network isolation is still enforced by the container itself either way. The npm sandbox runs in a small `node:20` + `strace` image `depshieldx` builds and caches locally the first time it's needed.
 
@@ -157,6 +158,8 @@ Maven behavioral tracing is different in one fundamental way: unlike Cargo's `bu
 NuGet behavioral tracing has the broadest code-execution surface of the four compiled ecosystems: a `.nupkg` consumed as a plain `PackageReference` has no code that runs automatically during `dotnet restore` alone, but any package shipping a `build/*.targets` or `build/*.props` file gets it imported and evaluated during `dotnet build` -- not a narrow processor-registration mechanism like Maven's, but MSBuild's own general build-time extensibility point, available to any package that uses it. So the sandboxed `dotnet build` (against a trivial scratch source file, wrapped in `strace`) traces this real, broader surface. The NuGet sandbox runs in a small `mcr.microsoft.com/dotnet/sdk:8.0` + `strace` image built and cached locally the first time it's needed -- no plugin pre-warming needed, unlike Maven's `compile` goal. Like Cargo/Go/Maven, Trivy scans a host-side `packages.lock.json` built before the container runs (via a real, networked `dotnet restore` against the resolved set) -- Trivy's NuGet support needs a real lock file, detecting nothing from a bare `.csproj`.
 
 Pub's own real code-execution surface is Dart's official Native Assets "hooks" feature: a package can ship a `hook/build.dart` file (a real Dart entry point, typically used to compile a native C/Rust library) that the toolchain invokes for the root package and every transitive dependency during `dart run`/`dart test` -- confirmed this fires even when nothing actually imports the package, the same "presence in the dependency graph is enough" pattern Maven's/NuGet's own surfaces have. `dart pub get` alone never triggers hooks, the same "resolve never executes code" property every other ecosystem here has -- so the sandboxed `dart run` (against a trivial scratch entry-point file, wrapped in `strace`) is what actually traces this surface; `dart compile exe` was deliberately not used instead, since it refuses to run hooks at all. The Pub sandbox runs in a small `dart:3` + `strace` image built and cached locally the first time it's needed -- no plugin pre-warming needed. Like the other four, Trivy scans a host-side `pubspec.lock` built before the container runs (via a real, offline `dart pub get` against the resolved set's own freshly-built local package cache) -- Trivy's Pub support needs a real lock file, the same requirement NuGet's own support has.
+
+RubyGems behavioral tracing looks different from every other ecosystem here in one fundamental way: a native-extension gem's own `extconf.rb` build script runs as an unavoidable, inherent part of *installing* the gem itself, not a separate later run/build step -- so there's no clean split between "resolve/restore, unstraced" and "run/build, straced" the way Pub's pub-get-then-dart-run or NuGet's restore-then-build splits have. Confirmed directly this also means `bundle install` is never safe to run on the host at all -- unlike `cargo fetch --locked`/`go mod download`/`dotnet restore`/`dart pub get`, none of which invoke a compiler, `bundle install` genuinely compiles native code for any gem that ships one. So `depshieldx` never shells out to `bundle install`/`bundle lock` on the host to build the Trivy-facing lockfile; it writes `Gemfile.lock` directly from the resolution it already has (itself produced by a real, safe `bundle lock` scratch resolve). The sandboxed `bundle install --local` -- the same command Docker deep mode's offline-install step already runs -- is what gets wrapped in `strace` instead, tracing the whole install (including any real native-extension compilation) in one pass. The RubyGems sandbox runs in a small `ruby:3` + `strace` image built and cached locally the first time it's needed -- deliberately not `-slim`, since it needs to ship a real C toolchain (gcc/make) for that compilation to succeed rather than spuriously fail for one of the ecosystem's most common package shapes (nokogiri, sqlite3, pg, bcrypt, ...).
 
 ## Install vs Scan
 
@@ -383,6 +386,45 @@ What's still explicitly **not** supported for Pub:
 - cryptographic signature verification of any kind -- pub.dev has no signing infrastructure to verify against, unlike Maven/NuGet
 - Flutter-specific tooling (native platform plugin builds, `flutter pub`, `flutter build`) -- `depshieldx`'s Pub support is scoped to the standalone Dart SDK and hosted (pub.dev) dependencies only
 
+## RubyGems Support
+
+`depshieldx` can resolve, check, and install RubyGems packages too, with full fast and deep mode support.
+
+Two ways to point it at RubyGems:
+
+**A `Gemfile.lock` file in the current directory** -- auto-detected by filename, no flag needed:
+
+```bash
+depshieldx scan --lockfile Gemfile.lock
+depshieldx install --lockfile Gemfile.lock
+```
+
+**One or more bare gem names** -- pass `--ecosystem rubygems` so `depshieldx` knows they aren't PyPI names:
+
+```bash
+depshieldx scan rack --ecosystem rubygems
+depshieldx install rack --ecosystem rubygems
+depshieldx install rack@3.2.7 --ecosystem rubygems
+```
+
+A bare gem name (no version) resolves to that gem's latest version via rubygems.org's own gem API. Resolution shells out to the real `bundle lock` CLI against a scratch `Gemfile` in an isolated temp directory to compute the full, accurate transitive dependency graph, the same reasoning as Cargo's/Go's/Maven's/NuGet's/Pub's scratch-project resolve. Only the `GEM` section of a `Gemfile.lock` (rubygems.org-hosted gems) is resolved against the registry -- `GIT`/`PATH` sections have no registry checksum to verify against and are skipped, the same "not every entry is registry-fetchable" case Cargo's/npm's/Pub's own non-registry-sourced dependencies already are.
+
+If you have the [routing shim](#routing) enabled, `bundle add <gem...>` is also intercepted automatically and routed through `depshieldx install <gem...> --ecosystem rubygems` -- you don't need to change your muscle memory.
+
+"Install" here means `bundle add` -- adding the gem(s) to your project's `Gemfile`/`Gemfile.lock`. Unlike Cargo's/Go's/Pub's own "name@version" per-target syntax, `bundle add gem1 gem2 --version X` applies ONE shared version constraint to every named gem in the call (confirmed directly) -- there's no way to pin more than one independently-resolved exact version in a single invocation. So `depshieldx` loops one real `bundle add <gem> --version <v>` call per resolved gem instead, still ending up with every resolved gem -- transitive included -- pinned as a direct dependency, the same drift-prevention guarantee Cargo/Go/Pub already have. `depshieldx uninstall` is also supported, via `bundle remove` (multi-gem in one call).
+
+`--deep` is supported for RubyGems the same way it is for PyPI, npm, Cargo, Go, Maven, NuGet, and Pub: the resolved gem set (every real `.gem` archive) is fetched into a sandboxed container (`ruby:3` + `strace`) and scanned with Trivy against a real `Gemfile.lock` -- Trivy's Bundler support needs a real lock file, the same requirement NuGet's/Pub's own support has. Unlike every other ecosystem here, that `Gemfile.lock` is never produced by actually running `bundle` on the host: confirmed directly that `bundle install`/`bundle lock --local` either triggers real native-extension compilation or can't reliably resolve purely from a local cache, so `depshieldx` writes it directly from the resolution it already has instead. The sandboxed `bundle install --local` (the same command Docker deep mode's install step already runs) is what's traced with `strace` for filesystem, process, and network activity -- see [Modes](#modes) for details. RubyGems' real code-execution surface is a native-extension gem's own `extconf.rb`, run as an unavoidable part of installing it -- not a separate later step the way Pub's hooks/NuGet's `build/*.targets` are.
+
+Provenance checks for RubyGems combine a real cryptographic checksum check (SHA-256, verified against the exact hash rubygems.org's own API publishes for that release) with a structural yank signal -- see [Provenance And Attestations](#provenance-and-attestations). Unlike NuGet's "unlisted" (still resolvable/queryable when pinned exactly) or Pub's "retracted" (stays in the registry's own version list forever, just flagged), a RubyGems version yanked long enough ago is removed outright -- confirmed directly against the real 2019 `rest-client` hijack incident (1.6.10-1.6.13): both the full versions list and the per-version registry endpoint have no record of it at all, a plain 404 rather than a `yanked: true` payload. Since that 404 is genuinely ambiguous between "never existed" and "yanked and purged", `depshieldx` surfaces it as an honest, non-blocking "could not verify this version" warning rather than asserting a specific cause it can't actually confirm.
+
+Unlike Pub, deps.dev does support RubyGems as an ecosystem -- no explicit skip needed here.
+
+What's still explicitly **not** supported for RubyGems:
+
+- `.gemspec`-as-input -- only `Gemfile.lock` or bare gem names via `--ecosystem rubygems` are accepted
+- cryptographic signature verification of any kind -- rubygems.org's Sigstore support is still opt-in/in-progress, and the older X.509 `gem cert` scheme is opt-in and rarely used in practice, so integrity rests entirely on the SHA-256 checksum check, the same as Pub
+- platform-specific gem variants (a gem publishing separate prebuilt binaries per OS/CPU) -- `depshieldx` always resolves and verifies against the platform-agnostic "ruby" build, matching what a real `bundle lock` and rubygems.org's own per-version API both default to when no platform is specified
+
 ## Commands
 
 Main commands:
@@ -551,11 +593,20 @@ depshieldx scan --lockfile pubspec.lock
 depshieldx install --lockfile pubspec.lock
 ```
 
+RubyGems packages and lockfiles:
+
+```bash
+depshieldx scan rack --ecosystem rubygems
+depshieldx install rack@3.2.7 --ecosystem rubygems
+depshieldx scan --lockfile Gemfile.lock
+depshieldx install --lockfile Gemfile.lock
+```
+
 ## Supported Inputs
 
 `depshieldx` accepts:
 
-- one package name (PyPI by default, npm with `--ecosystem npm`, Cargo/crates.io with `--ecosystem cargo`, Go with `--ecosystem go`, Maven coordinates with `--ecosystem maven`, NuGet with `--ecosystem nuget`, or Pub with `--ecosystem pub`)
+- one package name (PyPI by default, npm with `--ecosystem npm`, Cargo/crates.io with `--ecosystem cargo`, Go with `--ecosystem go`, Maven coordinates with `--ecosystem maven`, NuGet with `--ecosystem nuget`, Pub with `--ecosystem pub`, or RubyGems with `--ecosystem rubygems`)
 - multiple package names (same ecosystem rule as above)
 - `-r requirements.txt` (PyPI only)
 - `--lockfile uv.lock` (PyPI)
@@ -564,6 +615,7 @@ depshieldx install --lockfile pubspec.lock
 - `--lockfile go.sum` (Go, auto-detected by filename)
 - `--lockfile packages.lock.json` (NuGet, auto-detected by filename)
 - `--lockfile pubspec.lock` (Pub, auto-detected by filename)
+- `--lockfile Gemfile.lock` (RubyGems, auto-detected by filename)
 - `--pyproject pyproject.toml` (PyPI only)
 
 Maven has no canonical lockfile, so it has no `--lockfile` equivalent -- coordinates are always passed explicitly via `--ecosystem maven`.
@@ -576,6 +628,7 @@ Current lockfile behavior:
 - `go.sum` resolution reads the sibling `go.mod`'s full resolved module graph (via `go list -m all`) rather than parsing `go.sum` itself, since `go.sum` is a checksum allowlist, not the resolved graph -- it can list more module versions than actually ship
 - `packages.lock.json` is parsed directly; if a package appears across multiple target frameworks with disagreeing versions, only the newest resolved version is kept, the same "keep the newest" rule as `Cargo.lock`
 - `pubspec.lock` is parsed directly (it's real YAML); only `source: hosted` entries are resolved against the registry -- `source: git`/`source: path`/`source: sdk` entries have no registry checksum to verify against and are skipped, the same "not every entry is registry-fetchable" case Cargo's/npm's git-sourced dependencies already are
+- `Gemfile.lock` is parsed directly (Bundler's own custom text format, not YAML/JSON); only the `GEM` section's resolved specs are read -- `GIT`/`PATH` sections have no registry checksum to verify against and are skipped, the same "not every entry is registry-fetchable" case pubspec.lock's own `source: hosted`-only filtering already is
 - other PyPI lockfile-style inputs are treated like requirement-style pinned targets
 
 ## Output Modes
@@ -652,7 +705,7 @@ For multi-package installs, the summary also includes:
 
 - a requested-package source breakdown
 - one receipt path per requested package
-- one project link (PyPI, npm, crates.io, pkg.go.dev, nuget.org, or pub.dev) per requested package when relevant
+- one project link (PyPI, npm, crates.io, pkg.go.dev, nuget.org, pub.dev, or rubygems.org) per requested package when relevant
 
 ## Provenance And Attestations
 
@@ -704,7 +757,12 @@ For Pub/pub.dev, provenance combines a real cryptographic checksum check with st
 - whether the resolved package is discontinued (a real, package-level flag an author or pub.dev admin can set, optionally naming a replacement)
 - whether the resolved version has been retracted (a publisher can retract a version within 7 days of publishing it -- Pub's closest equivalent to a yanked release)
 
-Either way, a block only happens when verification was actually attempted and failed -- not attestations being absent at all, since most packages on PyPI and npm don't publish them, Cargo/Go have no per-package attestations to check in the first place, most Maven artifacts published today are PGP-only, not yet Sigstore-signed, and Pub has no signing scheme to check in the first place either.
+For RubyGems/rubygems.org, provenance combines a real cryptographic checksum check with a structural yank signal -- rubygems.org has no default, always-present signing scheme either (Sigstore support is still opt-in/in-progress, the older X.509 `gem cert` scheme is opt-in and rarely used):
+
+- checksum verification (SHA-256, verified against the exact hash rubygems.org's own API publishes for that release -- a real cryptographic hash comparison, not a structural check)
+- whether the resolved version has been yanked, where the registry still reports it (a version yanked long enough ago is fully removed from the registry instead, rather than staying queryable with a `yanked: true` flag -- see [RubyGems Support](#rubygems-support) for the real, confirmed-directly difference from NuGet's/Pub's own yank-equivalent signals)
+
+Either way, a block only happens when verification was actually attempted and failed -- not attestations being absent at all, since most packages on PyPI and npm don't publish them, Cargo/Go have no per-package attestations to check in the first place, most Maven artifacts published today are PGP-only, not yet Sigstore-signed, and Pub/RubyGems have no default signing scheme to check in the first place either.
 
 ## Vulnerability Sources
 
@@ -754,7 +812,7 @@ Receipts include package-level details such as:
 
 ## Routing
 
-`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, `cargo add <crate>`, `go get <module>`, `dotnet add package <name>`, and `dart pub add <package...>` commands go through `depshieldx`.
+`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, `cargo add <crate>`, `go get <module>`, `dotnet add package <name>`, `dart pub add <package...>`, and `bundle add <gem...>` commands go through `depshieldx`.
 
 ```bash
 depshieldx routing status
@@ -764,8 +822,8 @@ depshieldx routing disable
 
 Routing is platform-aware:
 
-- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`, `go`, `dotnet`, `dart`)
-- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`, `go.bat`, `dotnet.bat`, `dart.bat`)
+- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`, `go`, `dotnet`, `dart`, `bundle`)
+- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`, `go.bat`, `dotnet.bat`, `dart.bat`, `bundle.bat`)
 
 What each shim intercepts:
 
@@ -777,8 +835,9 @@ What each shim intercepts:
 - `go get <module...>` -- one or more module paths with no other flags, routed through `depshieldx install <module...> --ecosystem go`. `go install` (binary programs) is not intercepted -- depshieldx's Go support only covers `go get`
 - `dotnet add package <name>` / `dotnet add package <name> --version <version>` -- exactly one package, no other flags, routed through `depshieldx install <name>[@version] --ecosystem nuget`. No project positional and no other `dotnet add package` flags (`--framework`, `--prerelease`, ...) are intercepted -- anything beyond this exact shape passes straight through to the real `dotnet`
 - `dart pub add <package...>` -- one or more package names with no other flags, routed through `depshieldx install <package...> --ecosystem pub`. Non-hosted descriptor syntax (`"foo@{path: ...}"`, `"foo@{git: ...}"`, `"foo@{sdk: ...}"`) and section prefixes (`dev:foo`, `override:foo`) are not intercepted -- depshieldx's Pub support only covers hosted (pub.dev) packages, and anything using that syntax passes straight through to the real `dart`
+- `bundle add <gem...>` (no other flags) -- one or more gem names, routed through `depshieldx install <gem...> --ecosystem rubygems`. `bundle add <gem> --version <version>` (exactly one gem) is also intercepted, routed through `depshieldx install <gem>@<version> --ecosystem rubygems`. `bundle add <gem1> <gem2> --version <version>` (a shared version across multiple gems -- confirmed directly this is real Bundler behavior) is **not** intercepted, since that shape doesn't map to a safe per-gem depshieldx target; it passes straight through to the real `bundle`
 
-There is no Maven shim, and none is planned -- unlike `pip install`/`npm install`/`cargo add`/`go get`/`dotnet add package`/`dart pub add`, `mvn` has no native CLI verb for "add a dependency" to intercept in the first place; Maven dependencies are added by editing `pom.xml` directly. See [Maven / Maven Central Support](#maven--maven-central-support).
+There is no Maven shim, and none is planned -- unlike `pip install`/`npm install`/`cargo add`/`go get`/`dotnet add package`/`dart pub add`/`bundle add`, `mvn` has no native CLI verb for "add a dependency" to intercept in the first place; Maven dependencies are added by editing `pom.xml` directly. See [Maven / Maven Central Support](#maven--maven-central-support).
 
 Anything else (flags mixed in with a package name, other subcommands like `run`, global installs) passes straight through to the real tool untouched.
 
@@ -819,19 +878,20 @@ depshieldx ui
 
 ## Limitations
 
-- deep mode depends on Docker being available (for npm, a small local `node:20` + `strace` image is built on first use; for Cargo, a small local `rust:1-slim` + `strace` image is built on first use; for Go, a small local `golang:1-bookworm` + `strace` image is built on first use; for Maven, a small local `maven:3-eclipse-temurin-21` + `strace` image, with Maven's own default-lifecycle plugin set pre-warmed in, is built on first use; for NuGet, a small local `mcr.microsoft.com/dotnet/sdk:8.0` + `strace` image is built on first use; for Pub, a small local `dart:3` + `strace` image is built on first use -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), [Maven / Maven Central Support](#maven--maven-central-support), [NuGet Support](#nuget-support), and [Pub Support](#pub-support))
+- deep mode depends on Docker being available (for npm, a small local `node:20` + `strace` image is built on first use; for Cargo, a small local `rust:1-slim` + `strace` image is built on first use; for Go, a small local `golang:1-bookworm` + `strace` image is built on first use; for Maven, a small local `maven:3-eclipse-temurin-21` + `strace` image, with Maven's own default-lifecycle plugin set pre-warmed in, is built on first use; for NuGet, a small local `mcr.microsoft.com/dotnet/sdk:8.0` + `strace` image is built on first use; for Pub, a small local `dart:3` + `strace` image is built on first use; for RubyGems, a small local `ruby:3` + `strace` image is built on first use -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), [Maven / Maven Central Support](#maven--maven-central-support), [NuGet Support](#nuget-support), [Pub Support](#pub-support), and [RubyGems Support](#rubygems-support))
 - deep mode also depends on Trivy being installed
 - deep mode is slower than fast mode
-- npm's, Cargo's, Go's, Maven's, NuGet's, and Pub's behavioral tracing (Docker deep mode) all observe syscalls via `strace` rather than actively blocking them in real time the way PyPI's in-process guards do; filesystem/network isolation is still enforced by the container itself either way
+- npm's, Cargo's, Go's, Maven's, NuGet's, Pub's, and RubyGems' behavioral tracing (Docker deep mode) all observe syscalls via `strace` rather than actively blocking them in real time the way PyPI's in-process guards do; filesystem/network isolation is still enforced by the container itself either way
 - the safety guarantees depend in part on the local Python and `pip` versions
 - Cargo resolution, install, and deep mode all shell out to a local `cargo` on `PATH`; there is no preflight check for this, so a missing Rust toolchain only surfaces later, as a resolution failure
 - Go resolution, install, and deep mode all shell out to a local `go` on `PATH` the same way; there is no preflight check for this either, so a missing Go toolchain only surfaces later, as a resolution failure
 - Maven resolution, install, and deep mode all shell out to a local `mvn` on `PATH` the same way; there is no preflight check for this either, so a missing Java/Maven toolchain only surfaces later, as a resolution failure
 - NuGet resolution, install, and deep mode all shell out to a local `dotnet` on `PATH` the same way; there is no preflight check for this either, so a missing .NET SDK only surfaces later, as a resolution failure
 - Pub resolution, install, and deep mode all shell out to a local `dart` on `PATH` the same way; there is no preflight check for this either, so a missing Dart SDK only surfaces later, as a resolution failure
+- RubyGems resolution, install, and deep mode all shell out to a local `bundle` on `PATH` the same way; there is no preflight check for this either, so a missing Ruby/Bundler install only surfaces later, as a resolution failure
 - `Cargo.lock` parsing keeps only the newest resolved version when the same crate appears pinned at two different major versions; the older entry is silently dropped -- `packages.lock.json` parsing follows the same "keep the newest" rule when a package disagrees across target frameworks
 - not every Go module resolved for deep mode has an importable root package (some are subpackage-only, e.g. `golang.org/x/crypto`); those are skipped from behavioral tracing rather than failing the whole sandboxed build, and listed in the full JSON report's `skipped_modules`
-- some packages publish no PyPI or npm attestations at all; that is usually informational, not a red flag -- Cargo/crates.io and Go modules have no per-package attestation infrastructure at all, so this is categorically true for every crate/module, not just some; Maven has real Sigstore support but it's still new and opt-in, so most Maven artifacts today are in the same boat; NuGet and Pub have no Sigstore equivalent at all
+- some packages publish no PyPI or npm attestations at all; that is usually informational, not a red flag -- Cargo/crates.io and Go modules have no per-package attestation infrastructure at all, so this is categorically true for every crate/module, not just some; Maven has real Sigstore support but it's still new and opt-in, so most Maven artifacts today are in the same boat; NuGet, Pub, and RubyGems have no default Sigstore equivalent at all
 - attestation verification can depend on upstream trust metadata availability
 - npm's own "publish" attestation (signed with npm registry's own key, not a Fulcio certificate) is recorded structurally but not cryptographically verified -- only npm's SLSA provenance attestation is, since that's the one signed via GitHub Actions OIDC the same way PyPI's Trusted Publishing attestations are
 - Cargo has no cryptographic provenance verification at all -- crates.io currently has nothing equivalent to verify against
@@ -844,6 +904,10 @@ depshieldx ui
 - Pub has no cryptographic signature verification at all -- pub.dev has no Sigstore/PGP/X.509 signing scheme to verify against, unlike Maven/NuGet; integrity rests entirely on the SHA-256 checksum check
 - deps.dev does not support Pub as an ecosystem at all -- `depshieldx` skips it explicitly rather than silently querying the wrong system, so a Pub scan's `deps-dev: no vulnerabilities` means "not checked", not "checked and clean"
 - Pub's behavioral tracing only covers Dart's Native Assets "hooks" mechanism (`hook/build.dart`) -- Flutter-specific native platform plugin code (compiled during an actual `flutter build`, not anything `dart run`/`dart pub get` trigger) is out of scope, since `depshieldx`'s Pub support targets the standalone Dart SDK, not Flutter
+- RubyGems has no cryptographic signature verification at all -- Sigstore support for rubygems.org is still opt-in/in-progress and the older X.509 `gem cert` scheme is rarely used in practice, so integrity rests entirely on the SHA-256 checksum check, the same as Pub
+- a RubyGems version yanked long enough ago is removed outright from the registry rather than staying queryable with a `yanked: true` flag (confirmed directly against the real 2019 `rest-client` hijack incident) -- since a 404 there is ambiguous between "never existed" and "yanked and purged", `depshieldx` reports it as an honest, non-blocking warning rather than asserting a confirmed yank
+- `depshieldx` never runs `bundle install`/`bundle lock --local` on the host for RubyGems deep mode -- confirmed directly `bundle install` triggers real native-extension compilation, unlike every other ecosystem's own host-side restore/fetch step; the Trivy-facing `Gemfile.lock` is written directly from the already-known resolution instead, and only the fully-isolated sandbox container actually runs `bundle install`
+- platform-specific RubyGems variants (a gem publishing separate prebuilt binaries per OS/CPU) are out of scope -- `depshieldx` always resolves and verifies against the platform-agnostic "ruby" build, matching what a real `bundle lock` and rubygems.org's own per-version API both default to
 - vulnerability-source coverage depends on the upstream services
 
 ## FAQ
