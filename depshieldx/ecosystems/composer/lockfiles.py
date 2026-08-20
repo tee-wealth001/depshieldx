@@ -48,3 +48,28 @@ def parse_composer_lock(lockfile_path: str) -> dict[str, str]:
             if name and version:
                 resolved_versions[name] = version
     return resolved_versions
+
+
+def write_composer_lock(resolved_versions: dict[str, str]) -> str:
+    """Serializes an already-known, already-real resolution back into
+    composer.lock's own JSON shape, for runner.py's
+    prepare_composer_download_bundle -- mirrors ecosystems/rubygems/
+    lockfiles.py's own write_gemfile_lock: the resolution already came
+    from a genuine `composer require --no-install` scratch resolve or a
+    parsed real composer.lock (see ecosystem.py's resolve()), so this
+    only needs to reproduce it as a file Trivy can read, not re-derive it
+    by invoking composer again.
+
+    Deliberately minimal -- omits `content-hash` (a hash of composer.
+    json's own requirements used only for staleness detection, confirmed
+    directly not read by parse_composer_lock above or by Trivy) and every
+    per-package `source`/`dist`/`require` field real Composer itself
+    writes. Confirmed directly against a real `trivy fs` scan (a package/
+    version pair with a real, known CVE) that a lockfile with only
+    `packages`/`packages-dev` name+version entries is fully sufficient
+    for Trivy's own composer.lock vulnerability detection -- the same
+    "BUNDLED WITH omitted entirely, still round-trips cleanly" minimalism
+    write_gemfile_lock's own docstring documents for Bundler.
+    """
+    packages = [{"name": name, "version": version} for name, version in sorted(resolved_versions.items())]
+    return json.dumps({"packages": packages, "packages-dev": []}, indent=4) + "\n"
