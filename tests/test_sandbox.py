@@ -1504,6 +1504,50 @@ class RubyGemsSandboxTests(unittest.TestCase):
         self.assertIn(":/tmp/depshieldx-rubygems-unused:rw", " ".join(docker_command))
 
 
+class RunSandboxFailureOutputTests(unittest.TestCase):
+    """A real container/docker-environment failure (a bad manifest, a
+    bind-mount permission error, ...) is a genuinely common, non-crash
+    outcome -- confirmed directly via two real CI failures on the same
+    day (Windows: "no matching manifest for windows.../amd64", Linux: a
+    bind-mounted sandbox_wrapper.py "Permission denied") that both
+    surfaced the same real bug: click.secho(f"Sandbox failed: ...")
+    previously had no err=True, so this message landed on *stdout*
+    ahead of the JSON report -- silently breaking `--output json`'s
+    "stdout stays pure JSON" contract the same way every other user-
+    facing message in this codebase (cli/output.py's _echo_error/
+    _echo_step, always routed through stderr for exactly this reason)
+    already avoids."""
+
+    @patch("depshieldx.sandbox.click.secho")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.analyze_artifacts", return_value={"blocked": False})
+    @patch("depshieldx.sandbox.download_packages")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_sandbox_command_failure_reports_via_stderr_not_stdout(
+        self,
+        _mock_docker,
+        mock_download,
+        _mock_analyze,
+        mock_run_command,
+        mock_secho,
+    ):
+        def fake_download(_package_name, temp_dir, verbose=False):
+            Path(temp_dir, "pkg-0.1.0.tar.gz").write_bytes(b"fake")
+
+        mock_download.side_effect = fake_download
+        mock_run_command.side_effect = subprocess.CalledProcessError(
+            125, ["docker", "run"], output="", stderr="docker: no matching manifest for windows/amd64\n"
+        )
+
+        result = run_sandbox("badpkg")
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "sandbox")
+        self.assertIn("no matching manifest", result.error)
+        mock_secho.assert_called_once()
+        self.assertTrue(mock_secho.call_args.kwargs.get("err"), "Sandbox failure message must be echoed with err=True")
+
+
 class EvidenceCollectorTests(unittest.TestCase):
     def test_create_target_dir_uses_platform_temp_root(self):
         target_dir = _create_target_dir()

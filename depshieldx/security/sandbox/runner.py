@@ -1861,7 +1861,13 @@ def run_sandbox(
         if isinstance(exc, subprocess.CalledProcessError):
             detail = (exc.stderr or exc.stdout or str(exc)).strip()
             evidence = _extract_report((exc.stdout or "") + "\n" + (exc.stderr or ""))
-        click.secho(f"Sandbox failed: {detail}", fg="red")
+        # err=True is required, not cosmetic -- confirmed directly a real
+        # `--output json` smoke-test run left this on stdout, ahead of
+        # the JSON report, breaking "stdout stays pure JSON" the same way
+        # every other user-facing message in this codebase (cli/output.py's
+        # _echo_error/_echo_step, routed through stderr for exactly this
+        # reason) already avoids.
+        click.secho(f"Sandbox failed: {detail}", fg="red", err=True)
         return SandboxResult(
             success=False,
             downloaded_files=bundle.downloaded_files if bundle else [],
