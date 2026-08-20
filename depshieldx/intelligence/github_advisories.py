@@ -21,6 +21,7 @@ GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
     "go": "go",
     "maven": "maven",
     "nuget": "nuget",
+    "pub": "pub",
 }
 
 

@@ -42,7 +42,7 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
     # so it gets the same folding as PyPI.
     if ecosystem in ("pypi", "cargo"):
         return _normalize_pypi_name(name)
-    if ecosystem in ("go", "maven", "nuget"):
+    if ecosystem in ("go", "maven", "nuget", "pub"):
         # Go module paths are case-sensitive canonical identifiers
         # (confirmed directly against go.dev/ref/mod's module-path rules)
         # -- unlike every other ecosystem here, lowercasing would fold
@@ -68,7 +68,14 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
         # casing to the exact canonical form in the generated packages.
         # lock.json regardless of what casing was requested (confirmed
         # directly), so resolved_versions is already correctly cased by
-        # the time it reaches here.
+        # the time it reaches here. Pub package names are constrained to
+        # `^[a-zA-Z0-9_]+$` and, by convention, published in lowercase --
+        # but that convention is enforced going forward, not retroactively
+        # (confirmed directly against dart-lang/pub-dev's own
+        # `knownMixedCasePackages` allowlist of real, still-live, mixed-
+        # case packages grandfathered in from before the convention was
+        # enforced), so case is preserved rather than folded, the same
+        # "case genuinely matters, don't fold it" treatment as Go/Maven.
         return name.strip() if name else ""
     return name.strip().lower() if name else ""
 
@@ -84,11 +91,12 @@ def _strip_version_spec(target: str, ecosystem: str) -> str:
         search_from = 1 if target.startswith("@") else 0
         at_index = target.find("@", search_from)
         return target[:at_index] if at_index != -1 else target
-    if ecosystem in ("cargo", "go", "nuget"):
+    if ecosystem in ("cargo", "go", "nuget", "pub"):
         # "serde@=1.0.219" -> "serde"; "github.com/pkg/errors@v0.9.1" ->
         # "github.com/pkg/errors"; "Newtonsoft.Json@13.0.3" ->
-        # "Newtonsoft.Json" -- crate/module/package names have no scoping
-        # prefix to skip past, unlike npm's "@scope/name".
+        # "Newtonsoft.Json"; "http@1.6.0" -> "http" -- crate/module/
+        # package names have no scoping prefix to skip past, unlike npm's
+        # "@scope/name".
         at_index = target.find("@")
         return target[:at_index] if at_index != -1 else target
     if ecosystem == "maven":
@@ -136,6 +144,7 @@ def package_records(ecosystem: str, resolution: ResolutionResult) -> list[Packag
                     "go": "pkg.go.dev",
                     "maven": "repo1.maven.org",
                     "nuget": "nuget.org",
+                    "pub": "pub.dev",
                 }.get(ecosystem),
                 purl=purl,
                 digest=digest,

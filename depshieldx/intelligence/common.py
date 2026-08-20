@@ -63,8 +63,13 @@ def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
     same treatment for a different reason -- nuget.org's own resolution is case-
     insensitive, but OSV's NuGet-ecosystem matching is case-sensitive on the exact
     canonical casing (confirmed directly: "Microsoft.IdentityModel.JsonWebTokens"
-    matches real advisories, the all-lowercase variant matches none)."""
-    if ecosystem in ("go", "maven", "nuget"):
+    matches real advisories, the all-lowercase variant matches none). Pub
+    package names are case-sensitive too (a small, real grandfathered
+    allowlist of mixed-case packages predates pub.dev's lowercase-only
+    convention for new publishes, confirmed directly against dart-lang/
+    pub-dev's own source), so they get the same "preserve, don't fold"
+    treatment."""
+    if ecosystem in ("go", "maven", "nuget", "pub"):
         return name.strip()
     normalized = name.strip().lower()
     if ecosystem == "pypi":

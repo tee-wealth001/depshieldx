@@ -16,6 +16,7 @@ OSV_ECOSYSTEM_NAMES = {
     "go": "Go",
     "maven": "Maven",
     "nuget": "NuGet",
+    "pub": "Pub",
 }
 
 
