@@ -43,8 +43,19 @@ MAX_BINARY_SCAN_BYTES = 1_048_576
 # package's build/*.targets content either (confirmed directly with a
 # real hand-built test package -- see sandbox_wrapper_nuget.py's module
 # docstring), only a later `dotnet build` would.
-TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs", ".go"}
-INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json", "build.rs"}
+# ".rb" covers Ruby/RubyGems source. "extconf.rb" is RubyGems' own real
+# "install_only" analogue to build.rs/setup.py -- confirmed directly
+# against a real downloaded .gem file (json-2.9.0.gem ships ext/json/ext/
+# generator/extconf.rb and ext/json/ext/parser/extconf.rb) that this is
+# the canonical, always-executed-during-`bundle install` build script for
+# a native-extension gem, the same "one agreed-upon filename every
+# package with this shape uses" property build.rs already has -- see
+# rubygems_sandbox.Dockerfile's module docstring for the confirmed-
+# directly finding that installing a gem with one of these genuinely
+# compiles native code, unlike every other ecosystem's own host-side
+# "restore"/"fetch" step.
+TEXT_EXTENSIONS = {".py", ".toml", ".cfg", ".ini", ".js", ".mjs", ".cjs", ".ts", ".json", ".rs", ".go", ".rb"}
+INSTALL_SCRIPT_NAMES = {"setup.py", "pyproject.toml", "setup.cfg", "package.json", "build.rs", "extconf.rb"}
 NATIVE_BINARY_SUFFIXES = (".so", ".dylib", ".pyd", ".dll")
 ASCII_STRING_PATTERN = re.compile(rb"[\x20-\x7e]{6,}")
 URL_PATTERN = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{6,}")
@@ -576,6 +587,31 @@ def analyze_artifact(artifact_path: Path) -> List[StaticFinding]:
                 else:
                     text = _read_zip_member(archive, member_name)
                     findings.extend(_scan_text(artifact_path.name, member_name, text))
+        return findings
+
+    if artifact_path.suffix == ".gem":
+        # A .gem file is itself a plain, uncompressed tar (confirmed
+        # directly) containing three gzip-compressed inner members --
+        # metadata.gz, data.tar.gz, checksums.yaml.gz. The gem's actual
+        # source files (including any extconf.rb) live inside
+        # data.tar.gz, a SECOND, nested gzipped tar -- so this needs one
+        # more level of extraction than every other archive format here,
+        # not just a suffix-to-mode mapping.
+        with tarfile.open(artifact_path, "r:") as outer_archive:
+            if "data.tar.gz" not in outer_archive.getnames():
+                return findings
+            data_tar_gz = outer_archive.extractfile("data.tar.gz")
+            if data_tar_gz is None:
+                return findings
+            with tarfile.open(fileobj=data_tar_gz, mode="r:gz") as inner_archive:
+                member_names = [member.name for member in inner_archive.getmembers() if member.isfile()]
+                for member_name in _candidate_members(artifact_path.name, member_names):
+                    if _is_native_binary(member_name):
+                        data = _read_tar_binary_member(inner_archive, member_name)
+                        findings.extend(_scan_binary(artifact_path.name, member_name, data))
+                    else:
+                        text = _read_tar_member(inner_archive, member_name)
+                        findings.extend(_scan_text(artifact_path.name, member_name, text))
         return findings
 
     if suffixes[-2:] == [".tar", ".gz"] or artifact_path.suffix in {".tgz", ".tar", ".crate"}:

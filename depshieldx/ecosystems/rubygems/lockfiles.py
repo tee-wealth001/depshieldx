@@ -145,3 +145,43 @@ def direct_dependency_names(lockfile_path: str) -> list[str]:
                 names.append(match.group(1))
 
     return names
+
+
+def write_gemfile_lock(resolved_versions: dict[str, str]) -> str:
+    """Serializes an already-known, already-real resolution (produced by
+    a genuine `bundle lock` run or by parsing a real Gemfile.lock -- see
+    ecosystem.py's resolve()) back into Bundler's own lockfile text
+    format, for the one case that needs to reproduce a Gemfile.lock
+    without re-invoking bundle: runner.py's prepare_rubygems_download_bundle,
+    which deliberately never runs `bundle install`/`bundle lock` on the
+    host at all (confirmed directly this triggers real native-extension
+    compilation -- see rubygems_sandbox.Dockerfile's module docstring).
+
+    Every resolved package (transitive included) is written as both a
+    GEM spec entry and a DEPENDENCIES entry, exactly pinned -- confirmed
+    directly this round-trips cleanly through a real `bundle install
+    --local` (used only inside the fully-isolated sandbox container,
+    never on the host) with "Found no changes, using resolution from the
+    lockfile". "PLATFORMS: ruby" (rather than the sandbox container's or
+    the host's own specific platform triple) is used deliberately --
+    confirmed directly this is accepted the same as an exact platform
+    match, and is the one platform value guaranteed correct regardless
+    of which architecture the sandbox container itself ends up running
+    on. "BUNDLED WITH" is omitted entirely -- confirmed directly a real
+    `bundle install --local` run against a lockfile missing that section
+    works identically to one with a (here, inevitably guessed and
+    possibly wrong) version pinned."""
+    specs = "\n".join(f"    {name} ({version})" for name, version in sorted(resolved_versions.items()))
+    dependencies = "\n".join(f"  {name} (= {version})" for name, version in sorted(resolved_versions.items()))
+    return (
+        "GEM\n"
+        "  remote: https://rubygems.org/\n"
+        "  specs:\n"
+        f"{specs}\n"
+        "\n"
+        "PLATFORMS\n"
+        "  ruby\n"
+        "\n"
+        "DEPENDENCIES\n"
+        f"{dependencies}\n"
+    )

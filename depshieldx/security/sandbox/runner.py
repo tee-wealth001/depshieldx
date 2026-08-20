@@ -33,6 +33,8 @@ from ...ecosystems.maven.registry import (
 )
 from ...ecosystems.nuget.ecosystem import _build_scratch_csproj, resolve_dotnet_tool
 from ...ecosystems.pub.ecosystem import _build_scratch_pubspec, resolve_dart_tool
+from ...ecosystems.rubygems.ecosystem import _build_scratch_gemfile
+from ...ecosystems.rubygems.lockfiles import write_gemfile_lock
 from ...core.resolver import ResolutionResult
 from ...core.runtime import pip_command, resource_path, system_python_executable
 from ..trivy import scan_filesystem
@@ -79,6 +81,14 @@ NUGET_SANDBOX_IMAGE_TAG = "depshieldx-nuget-sandbox:sdk8"
 # ships, once $PUB_CACHE is writable (see that Dockerfile's own
 # docstring for the one real wrinkle there).
 PUB_SANDBOX_IMAGE_TAG = "depshieldx-pub-sandbox:dart3"
+# Unlike every other *_SANDBOX_IMAGE_TAG here, built from plain `ruby:3`
+# rather than a `-slim`/minimal variant -- confirmed directly `ruby:3`
+# already ships gcc/make (needed for real native-extension gems to build
+# successfully inside the sandbox) and python3 (unlike node:20/rust:1-
+# slim/dart:3, which all needed it installed explicitly), only strace is
+# missing. See rubygems_sandbox.Dockerfile's own module docstring for the
+# full reasoning, including why `bundle install` never runs host-side.
+RUBYGEMS_SANDBOX_IMAGE_TAG = "depshieldx-rubygems-sandbox:ruby3"
 SANDBOX_USER = "65534:65534"
 
 
@@ -397,6 +407,31 @@ def _ensure_pub_sandbox_image(verbose: bool = False) -> None:
         str(dockerfile),
         "-t",
         PUB_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
+def _ensure_rubygems_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's ruby:3 + strace image if it isn't already
+    present locally. Mirrors _ensure_pub_sandbox_image -- no pre-warming
+    needed (see rubygems_sandbox.Dockerfile's docstring)."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", RUBYGEMS_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("security/sandbox/docker/rubygems_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        RUBYGEMS_SANDBOX_IMAGE_TAG,
         str(dockerfile.parent),
     ]
     _run_command(build_command, verbose=verbose)
@@ -1067,6 +1102,90 @@ def prepare_pub_download_bundle(ecosystem, resolved_versions: dict[str, str]) ->
         raise
 
 
+def prepare_rubygems_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """RubyGems' counterpart to prepare_pub_download_bundle -- downloads
+    (and, via fetch_artifact, checksum-verifies against the registry's
+    own reported hash) every resolved gem's real .gem archive flat into
+    temp_dir's root (analyze_artifacts() gets a new ".gem" suffix
+    dispatch for this -- see artifact_analysis.py, a real .gem file is a
+    plain uncompressed tar containing a nested gzipped data.tar.gz, not
+    the same shape a suffix-to-mode mapping alone could handle), then
+    *also* copies each one, byte-identical, into a vendor/cache-shaped
+    layout (a flat directory of raw <name>-<version>.gem files --
+    confirmed directly this matches the real vendor/cache layout `bundle
+    cache` itself produces) so the sandboxed `bundle install --local`
+    (sandbox_wrapper_rubygems.py) can install entirely offline.
+
+    Also writes a scratch Gemfile (every resolved gem as an exact-pinned
+    direct dependency, reusing ecosystems/rubygems/ecosystem.py's own
+    _build_scratch_gemfile -- same "pin everything, not just the
+    requested targets" reasoning as prepare_cargo_download_bundle/
+    prepare_go_download_bundle/prepare_maven_download_bundle/
+    prepare_nuget_download_bundle/prepare_pub_download_bundle) alongside
+    a matching Gemfile.lock this function writes *directly* from the
+    already-known resolved_versions via write_gemfile_lock, rather than
+    invoking `bundle` to produce one.
+
+    Deliberately never invokes `bundle install`/`bundle lock` itself
+    here -- confirmed directly (see rubygems_sandbox.Dockerfile's module
+    docstring) that `bundle install` triggers real native-extension
+    compilation (a resolved gem's own extconf.rb) as an unavoidable part
+    of installing a gem that has one, unlike every other ecosystem's own
+    host-side "restore"/"fetch" equivalent, none of which invoke a
+    compiler. The resolution itself is already real and trustworthy (it
+    came from ecosystems/rubygems/ecosystem.py's own real `bundle lock`
+    scratch resolve, or from parsing a real Gemfile.lock) -- this only
+    materializes that already-confirmed result into the file Trivy needs
+    (confirmed directly: Trivy natively parses Gemfile.lock, "[bundler]
+    Detecting vulnerabilities..."), it doesn't re-derive it. A separate,
+    ALSO real `bundle install --local` run happens only inside the
+    fully-isolated sandbox container itself (sandbox_wrapper_rubygems.py)
+    -- untrusted native-extension build code executing inside a
+    --network none/--read-only/--cap-drop ALL/non-root container is
+    exactly the isolation this project's sandbox already exists for,
+    unlike the same code running unguarded on the host.
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        cache_dir = Path(temp_dir) / "vendor" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        for package_name, version, artifact in ecosystem.selected_artifact_entries(resolution):
+            artifact_path = ecosystem.fetch_artifact(artifact, Path(temp_dir))
+            shutil.copy2(artifact_path, cache_dir / f"{package_name}-{version}.gem")
+
+        gemfile_path = Path(temp_dir) / "Gemfile"
+        gemfile_path.write_text(_build_scratch_gemfile(list(resolved_versions.items())), encoding="utf-8")
+
+        gemfile_lock_path = Path(temp_dir) / "Gemfile.lock"
+        gemfile_lock_path.write_text(write_gemfile_lock(resolved_versions), encoding="utf-8")
+
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -1137,6 +1256,7 @@ def run_sandbox(
     is_maven = ecosystem.name == "maven"
     is_nuget = ecosystem.name == "nuget"
     is_pub = ecosystem.name == "pub"
+    is_rubygems = ecosystem.name == "rubygems"
     docker_image = (
         NPM_SANDBOX_IMAGE_TAG
         if is_npm
@@ -1148,7 +1268,9 @@ def run_sandbox(
         if is_maven
         else NUGET_SANDBOX_IMAGE_TAG
         if is_nuget
-        else PUB_SANDBOX_IMAGE_TAG if is_pub else DOCKER_IMAGE
+        else PUB_SANDBOX_IMAGE_TAG
+        if is_pub
+        else RUBYGEMS_SANDBOX_IMAGE_TAG if is_rubygems else DOCKER_IMAGE
     )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
@@ -1211,6 +1333,8 @@ def run_sandbox(
             bundle = prepare_nuget_download_bundle(ecosystem, resolved_versions or {})
         elif is_pub:
             bundle = prepare_pub_download_bundle(ecosystem, resolved_versions or {})
+        elif is_rubygems:
+            bundle = prepare_rubygems_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -1546,6 +1670,54 @@ def run_sandbox(
                 ]
                 env_args = ["-e", "HOME=/tmp"]
                 _ensure_pub_sandbox_image(verbose=verbose)
+            elif is_rubygems:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_rubygems.py",
+                    "/tmp/packages",
+                    *[f"{name}@{version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('security/sandbox/sandbox_wrapper_rubygems.py').parent}:/depshieldx:ro"
+                # prepare_rubygems_download_bundle already built the flat
+                # .gem/Gemfile/Gemfile.lock/vendor-cache layout host-side,
+                # before the container ever runs -- no plugin-cache merge
+                # needed, same as NuGet/Maven/Pub. So, like those, there's
+                # no new output that needs to survive tmpfs teardown via a
+                # bind-mounted install dir: host_install_dir/
+                # container_install_path stay unused for RubyGems, and
+                # Trivy scans the host-side bundle directory directly
+                # (already bind-mounted read-only at /tmp/packages, since
+                # bundle.temp_dir itself is mounted there) -- Trivy's own
+                # Bundler support reads a real Gemfile.lock natively
+                # (confirmed directly), which prepare_rubygems_download_
+                # bundle already wrote host-side directly from the
+                # already-known resolution, without ever invoking bundle
+                # (see that function's own docstring for why).
+                container_install_path = "/tmp/depshieldx-rubygems-unused"
+                host_scan_subpath = None
+                scan_base_dir = bundle.temp_dir
+                # sandbox_wrapper_rubygems.py copies the mounted,
+                # pre-built vendor/cache (plus Gemfile/Gemfile.lock) into
+                # its own writable work directory before running `bundle
+                # install --local` there -- Bundler needs to write real
+                # bookkeeping (installed gemspecs, extension build
+                # output, its own vendor/cache updates) a read-only bind
+                # mount can't accommodate, the same "copy into a writable
+                # location before use" pattern sandbox_wrapper_maven.py/
+                # sandbox_wrapper_pub.py already use for their own state.
+                # 256m matches the other ecosystems' own build-stage
+                # tmpfs sizing rather than being tuned to the single case
+                # observed -- native-extension compilation in particular
+                # (confirmed directly this is a real, unavoidable part of
+                # `bundle install` for gems that have one, see
+                # rubygems_sandbox.Dockerfile's module docstring) can
+                # produce real build output under this tmpfs.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-rubygems-work:rw,nosuid,nodev,exec,size=256m",
+                ]
+                env_args = ["-e", "HOME=/tmp"]
+                _ensure_rubygems_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",

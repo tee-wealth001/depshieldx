@@ -68,6 +68,14 @@ a = Analysis(
             "security/sandbox",
         ),
         (
+            os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "docker", "rubygems_sandbox.Dockerfile"),
+            "security/sandbox/docker",
+        ),
+        (
+            os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "sandbox_wrapper_rubygems.py"),
+            "security/sandbox",
+        ),
+        (
             os.path.join(REPO_ROOT, "depshieldx", "presentation", "web", "templates", "dashboard.html"),
             "presentation/web/templates",
         ),
