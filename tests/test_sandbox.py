@@ -15,12 +15,14 @@ from depshieldx.ecosystems.go import GO_ECOSYSTEM
 from depshieldx.ecosystems.maven import MAVEN_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.ecosystems.nuget import NUGET_ECOSYSTEM
+from depshieldx.ecosystems.pub import PUB_ECOSYSTEM
 from depshieldx.sandbox import (
     CARGO_SANDBOX_IMAGE_TAG,
     GO_SANDBOX_IMAGE_TAG,
     MAVEN_SANDBOX_IMAGE_TAG,
     NPM_SANDBOX_IMAGE_TAG,
     NUGET_SANDBOX_IMAGE_TAG,
+    PUB_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
     SandboxResult,
@@ -32,6 +34,7 @@ from depshieldx.sandbox import (
     _ensure_maven_sandbox_image,
     _ensure_npm_sandbox_image,
     _ensure_nuget_sandbox_image,
+    _ensure_pub_sandbox_image,
     _extract_report,
     _run_command,
     _sandbox_cache_fingerprint,
@@ -42,6 +45,7 @@ from depshieldx.sandbox import (
     prepare_maven_download_bundle,
     prepare_npm_download_bundle,
     prepare_nuget_download_bundle,
+    prepare_pub_download_bundle,
     run_sandbox,
 )
 from depshieldx.security.sandbox.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
@@ -1174,6 +1178,158 @@ class NuGetSandboxTests(unittest.TestCase):
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/nuget-deep")
         self.assertIn(":/tmp/depshieldx-nuget-unused:rw", " ".join(docker_command))
+
+
+class PubSandboxTests(unittest.TestCase):
+    def _selected_entries(self, package_name, version):
+        artifact = {
+            "url": f"https://pub.dev/api/archives/{package_name}-{version}.tar.gz",
+            "filename": f"{package_name}-{version}.tar.gz",
+            "checksum_algorithm": "sha256",
+            "checksum": None,
+        }
+        return [(package_name, version, artifact)]
+
+    def _fake_archive_bytes(self) -> bytes:
+        # A real, minimal, openable tar+gzip archive with no wrapping
+        # top-level directory -- real pub.dev archives are plain
+        # tar+gzip with files at the top level (confirmed directly), so
+        # arbitrary non-tar bytes correctly raise a real extraction
+        # error rather than being silently accepted.
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            data = b'name: http\nversion: "1.6.0"\n'
+            info = tarfile.TarInfo(name="pubspec.yaml")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+        return buffer.getvalue()
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox.resolve_dart_tool", return_value="/usr/local/bin/dart")
+    @patch.object(PUB_ECOSYSTEM, "fetch_artifact")
+    @patch.object(PUB_ECOSYSTEM, "selected_artifact_entries")
+    def test_prepare_pub_download_bundle_builds_flat_archives_pub_cache_and_scratch_pubspec(
+        self, mock_entries, mock_fetch_artifact, _mock_which, mock_subprocess_run
+    ):
+        package_name, version = "http", "1.6.0"
+        mock_entries.return_value = self._selected_entries(package_name, version)
+
+        def _fake_fetch_artifact(artifact, destination):
+            path = Path(destination) / artifact["filename"]
+            path.write_bytes(self._fake_archive_bytes())
+            return path
+
+        mock_fetch_artifact.side_effect = _fake_fetch_artifact
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["dart", "pub", "get", "--offline"], returncode=0, stdout="", stderr=""
+        )
+
+        bundle = prepare_pub_download_bundle(PUB_ECOSYSTEM, {package_name: version})
+        try:
+            self.assertIn("http-1.6.0.tar.gz", bundle.downloaded_files)
+            self.assertIn("pubspec.yaml", bundle.downloaded_files)
+
+            pubspec_text = (Path(bundle.temp_dir) / "pubspec.yaml").read_text(encoding="utf-8")
+            self.assertIn('http: "1.6.0"', pubspec_text)
+
+            extracted_pubspec = Path(bundle.temp_dir) / "pub-cache" / "hosted" / "pub.dev" / "http-1.6.0" / "pubspec.yaml"
+            self.assertTrue(extracted_pubspec.exists())
+
+            resolve_args = mock_subprocess_run.call_args.args[0]
+            self.assertEqual(resolve_args[0], "/usr/local/bin/dart")
+            self.assertIn("--offline", resolve_args)
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_pub_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_pub_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_pub_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_pub_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(PUB_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("pub_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_pub_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_pub_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_pub_image_and_pub_wrapper_for_pub_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/pub-deep",
+            downloaded_files=["http-1.6.0.tar.gz", "pubspec.yaml", "pubspec.lock"],
+            artifact_hashes={"http-1.6.0.tar.gz": "abc"},
+            requirements_path="/tmp/pub-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"download_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"http": "1.6.0"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=PUB_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(PUB_ECOSYSTEM, {"http": "1.6.0"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(PUB_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_pub.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("http@1.6.0", docker_command)
+        self.assertIn(
+            "/tmp/depshieldx-pub-work:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for Pub -- the
+        # flat .tar.gz/pubspec.yaml/pubspec.lock/pub-cache layout was
+        # already built host-side, so Trivy scans the bundle directory
+        # directly instead of the (unused, empty) bind-mounted install
+        # dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/pub-deep")
+        self.assertIn(":/tmp/depshieldx-pub-unused:rw", " ".join(docker_command))
 
 
 class EvidenceCollectorTests(unittest.TestCase):

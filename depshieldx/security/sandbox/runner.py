@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import tarfile
@@ -31,6 +32,7 @@ from ...ecosystems.maven.registry import (
     parse_parent_coordinate,
 )
 from ...ecosystems.nuget.ecosystem import _build_scratch_csproj, resolve_dotnet_tool
+from ...ecosystems.pub.ecosystem import _build_scratch_pubspec, resolve_dart_tool
 from ...core.resolver import ResolutionResult
 from ...core.runtime import pip_command, resource_path, system_python_executable
 from ..trivy import scan_filesystem
@@ -69,6 +71,14 @@ MAVEN_SANDBOX_IMAGE_TAG = "depshieldx-maven-sandbox:maven3"
 # confirmed directly `dotnet restore` needs nothing beyond what the .NET
 # SDK itself already ships.
 NUGET_SANDBOX_IMAGE_TAG = "depshieldx-nuget-sandbox:sdk8"
+# Same reasoning as NUGET_SANDBOX_IMAGE_TAG -- built locally from
+# security/sandbox/docker/pub_sandbox.Dockerfile (dart:3 + strace +
+# python3, both confirmed missing from the base image). Like NuGet, no
+# build-time pre-warming is needed -- confirmed directly `dart pub get
+# --offline` needs nothing beyond what the Dart SDK itself already
+# ships, once $PUB_CACHE is writable (see that Dockerfile's own
+# docstring for the one real wrinkle there).
+PUB_SANDBOX_IMAGE_TAG = "depshieldx-pub-sandbox:dart3"
 SANDBOX_USER = "65534:65534"
 
 
@@ -361,6 +371,32 @@ def _ensure_nuget_sandbox_image(verbose: bool = False) -> None:
         str(dockerfile),
         "-t",
         NUGET_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
+def _ensure_pub_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's dart:3 + strace + python3 image if it isn't
+    already present locally. Mirrors _ensure_nuget_sandbox_image -- no
+    plugin-cache pre-warming needed (see pub_sandbox.Dockerfile's
+    docstring)."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", PUB_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("security/sandbox/docker/pub_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        PUB_SANDBOX_IMAGE_TAG,
         str(dockerfile.parent),
     ]
     _run_command(build_command, verbose=verbose)
@@ -947,6 +983,90 @@ def prepare_nuget_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
         raise
 
 
+def prepare_pub_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """Pub's counterpart to prepare_nuget_download_bundle -- downloads
+    (and, via fetch_artifact, checksum-verifies against the registry's
+    own reported hash) every resolved package's real .tar.gz archive
+    flat into temp_dir's root (same layout analyze_artifacts() already
+    finds .crate/.whl/.jar/.nupkg files at -- confirmed directly real
+    pub.dev archives are plain tar+gzip, the same format .crate files
+    use, so artifact_analysis.py's existing tar+gzip handler needs no
+    new suffix added), then *also* extracts each one directly into a
+    pub-cache-shaped layout (hosted/pub.dev/<name>-<version>/, confirmed
+    directly this matches the real $PUB_CACHE layout -- no flattening
+    needed the way Cargo's .crate archives need, real pub.dev archives
+    have no wrapping top-level directory) so the sandboxed `dart pub get
+    --offline` (sandbox_wrapper_pub.py) can resolve entirely offline.
+
+    Also writes a scratch pubspec.yaml (every resolved package as a
+    direct dependency, reusing ecosystems/pub/ecosystem.py's own
+    _build_scratch_pubspec -- same "pin everything, not just the
+    requested targets" reasoning as prepare_cargo_download_bundle/
+    prepare_go_download_bundle/prepare_maven_download_bundle/
+    prepare_nuget_download_bundle), then runs a real `dart pub get
+    --offline` against it *using the pub-cache this function just
+    built* -- unlike NuGet (which needs a separate real *networked*
+    restore to produce a lock file, since its local-folder source
+    mechanism doesn't need extraction), Pub's own offline cache is
+    already fully self-contained at this point, so no extra network
+    round-trip is needed to produce a real pubspec.lock. This is
+    required, not optional, confirmed directly the same way NuGet's own
+    lock-file requirement was: Trivy's Pub scanner reads pubspec.lock
+    natively (confirmed directly: "[pub] Detecting vulnerabilities...").
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        cache_root = Path(temp_dir) / "pub-cache" / "hosted" / "pub.dev"
+        for package_name, version, artifact in ecosystem.selected_artifact_entries(resolution):
+            artifact_path = ecosystem.fetch_artifact(artifact, Path(temp_dir))
+            extract_dir = cache_root / f"{package_name}-{version}"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(artifact_path, "r:gz") as archive:
+                archive.extractall(extract_dir, filter="data")
+
+        pubspec_path = Path(temp_dir) / "pubspec.yaml"
+        pubspec_path.write_bytes(_build_scratch_pubspec(list(resolved_versions.items())).encode("utf-8"))
+
+        env = dict(os.environ)
+        env["PUB_CACHE"] = str(Path(temp_dir) / "pub-cache")
+        lock_file_result = subprocess.run(
+            [resolve_dart_tool("dart"), "pub", "get", "--offline"],
+            cwd=temp_dir,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if lock_file_result.returncode != 0:
+            detail = (lock_file_result.stderr or lock_file_result.stdout or "").strip()
+            raise RuntimeError(f"dart could not produce a lock file for the resolved package set: {detail}")
+
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -1016,6 +1136,7 @@ def run_sandbox(
     is_go = ecosystem.name == "go"
     is_maven = ecosystem.name == "maven"
     is_nuget = ecosystem.name == "nuget"
+    is_pub = ecosystem.name == "pub"
     docker_image = (
         NPM_SANDBOX_IMAGE_TAG
         if is_npm
@@ -1023,7 +1144,11 @@ def run_sandbox(
         if is_cargo
         else GO_SANDBOX_IMAGE_TAG
         if is_go
-        else MAVEN_SANDBOX_IMAGE_TAG if is_maven else NUGET_SANDBOX_IMAGE_TAG if is_nuget else DOCKER_IMAGE
+        else MAVEN_SANDBOX_IMAGE_TAG
+        if is_maven
+        else NUGET_SANDBOX_IMAGE_TAG
+        if is_nuget
+        else PUB_SANDBOX_IMAGE_TAG if is_pub else DOCKER_IMAGE
     )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
@@ -1084,6 +1209,8 @@ def run_sandbox(
             bundle = prepare_maven_download_bundle(ecosystem, resolved_versions or {})
         elif is_nuget:
             bundle = prepare_nuget_download_bundle(ecosystem, resolved_versions or {})
+        elif is_pub:
+            bundle = prepare_pub_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -1377,6 +1504,48 @@ def run_sandbox(
                 ]
                 env_args = ["-e", "HOME=/tmp"]
                 _ensure_nuget_sandbox_image(verbose=verbose)
+            elif is_pub:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_pub.py",
+                    "/tmp/packages",
+                    *[f"{name}@{version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('security/sandbox/sandbox_wrapper_pub.py').parent}:/depshieldx:ro"
+                # prepare_pub_download_bundle already built the flat
+                # .tar.gz/pubspec.yaml/pubspec.lock/pub-cache layout
+                # host-side, before the container ever runs. Like
+                # NuGet/Maven, no plugin-cache merge is needed. So, like
+                # the other four ecosystems, there's no new output that
+                # needs to survive tmpfs teardown via a bind-mounted
+                # install dir: host_install_dir/container_install_path
+                # stay unused for Pub, and Trivy scans the host-side
+                # bundle directory directly (already bind-mounted
+                # read-only at /tmp/packages, since bundle.temp_dir
+                # itself is mounted there) -- Trivy's own Pub support
+                # reads a real pubspec.lock natively (confirmed directly:
+                # "[pub] Detecting vulnerabilities..."), which
+                # prepare_pub_download_bundle already generated host-side
+                # via a real `dart pub get --offline` against the same
+                # pub-cache this mount carries.
+                container_install_path = "/tmp/depshieldx-pub-unused"
+                host_scan_subpath = None
+                scan_base_dir = bundle.temp_dir
+                # sandbox_wrapper_pub.py copies the mounted, pre-built
+                # pub-cache into its own writable work directory before
+                # pointing $PUB_CACHE there -- confirmed directly `dart
+                # pub get` writes its own bookkeeping (an "active_roots"
+                # directory) into $PUB_CACHE even in --offline mode,
+                # which fails outright against a real read-only mount
+                # (see pub_sandbox.Dockerfile's docstring). 256m matches
+                # the other ecosystems' own build-stage tmpfs sizing
+                # rather than being tuned to the single case observed.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-pub-work:rw,nosuid,nodev,exec,size=256m",
+                ]
+                env_args = ["-e", "HOME=/tmp"]
+                _ensure_pub_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",
