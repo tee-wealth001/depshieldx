@@ -125,7 +125,12 @@ def _check_deep_does_not_crash(binary):
     try:
         json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        _fail(f"--deep --output json did not produce valid JSON even on a blocked/unavailable outcome: {exc}")
+        _fail(
+            f"--deep --output json did not produce valid JSON even on a blocked/unavailable outcome: {exc}\n"
+            f"exit code: {result.returncode}\n"
+            f"stdout: {result.stdout!r}\n"
+            f"stderr: {result.stderr!r}"
+        )
     print(f"OK: --deep exits cleanly (exit code {result.returncode}, valid JSON)")
 
 
