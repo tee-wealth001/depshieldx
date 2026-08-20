@@ -17,6 +17,7 @@ OSV_ECOSYSTEM_NAMES = {
     "maven": "Maven",
     "nuget": "NuGet",
     "pub": "Pub",
+    "rubygems": "RubyGems",
 }
 
 

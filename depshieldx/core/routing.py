@@ -37,7 +37,7 @@ def _shim_path() -> Path:
 # shims instead of one"). Kept as a separate, parallel set of functions
 # rather than folding "pip" into this list, so the existing pip-specific
 # behavior above stays untouched and its tests keep asserting on it directly.
-ADDITIONAL_MANAGED_TOOLS = ("npm", "yarn", "pnpm", "cargo", "go", "dotnet", "dart")
+ADDITIONAL_MANAGED_TOOLS = ("npm", "yarn", "pnpm", "cargo", "go", "dotnet", "dart", "bundle")
 
 
 def _shim_filename_for(tool: str) -> str:

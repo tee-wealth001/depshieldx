@@ -68,8 +68,11 @@ def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
     allowlist of mixed-case packages predates pub.dev's lowercase-only
     convention for new publishes, confirmed directly against dart-lang/
     pub-dev's own source), so they get the same "preserve, don't fold"
-    treatment."""
-    if ecosystem in ("go", "maven", "nuget", "pub"):
+    treatment. RubyGems gem names are case-sensitive too (confirmed
+    directly: a real lowercase "json" resolves, the uppercase "JSON"
+    404s), and OSV/GHSA/deps.dev all key RubyGems entries by that exact
+    casing (confirmed directly against real query responses)."""
+    if ecosystem in ("go", "maven", "nuget", "pub", "rubygems"):
         return name.strip()
     normalized = name.strip().lower()
     if ecosystem == "pypi":

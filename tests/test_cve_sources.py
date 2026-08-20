@@ -16,6 +16,9 @@ from depshieldx.intelligence.models import (
     _pub_compare,
     _pub_satisfies,
     _pub_satisfies_clause,
+    _rubygems_compare,
+    _rubygems_satisfies,
+    _rubygems_satisfies_clause,
 )
 from depshieldx.intelligence.osv import OSV_ECOSYSTEM_NAMES
 
@@ -394,6 +397,79 @@ class VersionVulnerabilityPubTests(unittest.TestCase):
     def test_unparseable_installed_version_assumes_vulnerable(self):
         vuln = VersionVulnerability(cve_id="CVE-TEST-PUB-3", source="osv", affected_versions=["<2.0.0"])
         self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="pub"))
+
+
+class RubyGemsCompareTests(unittest.TestCase):
+    """Every case here confirmed directly against a real, currently-
+    installed Ruby toolchain's Gem::Version <=> output -- not just
+    documentation -- see intelligence/models.py's _rubygems_compare
+    docstring."""
+
+    def test_trailing_zero_segments_are_equal(self):
+        self.assertEqual(_rubygems_compare("1.0", "1.0.0"), 0)
+
+    def test_prerelease_string_segment_sorts_below_numeric(self):
+        self.assertEqual(_rubygems_compare("1.0.0.pre", "1.0.0"), -1)
+        self.assertEqual(_rubygems_compare("1.0.a", "1.0.0"), -1)
+        self.assertEqual(_rubygems_compare("1.0.0.rc1", "1.0.0"), -1)
+        self.assertEqual(_rubygems_compare("1.0", "1.0.0.a"), 1)
+
+    def test_mixed_alpha_numeric_segment_compares_numerically(self):
+        # "1.0.a10" splits to (1, 0, "a", 10), not a lexical "a10" vs "a9"
+        # comparison (which would wrongly put "a10" before "a9").
+        self.assertEqual(_rubygems_compare("1.0.a10", "1.0.a9"), 1)
+
+    def test_numeric_segments_compare_numerically_not_lexically(self):
+        self.assertEqual(_rubygems_compare("1.9", "1.10"), -1)
+
+    def test_hyphen_is_a_real_pre_separator(self):
+        # Confirmed directly: Gem::Version.new("1.0.0-alpha").segments ==
+        # [1, 0, 0, "pre", "alpha"] -- the "-" becomes a real ".pre."
+        # segment, which then out-ranks a plain "alpha" segment
+        # alphabetically ("pre" > "alpha").
+        self.assertEqual(_rubygems_compare("1.0.0-alpha", "1.0.0.alpha"), 1)
+
+    def test_satisfies_clause_uses_rubygems_ordering(self):
+        self.assertTrue(_rubygems_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_rubygems_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_unparseable_version_returns_none_not_a_crash(self):
+        self.assertIsNone(_rubygems_compare("", "1.0.0"))
+
+
+class RubyGemsSatisfiesClauseTests(unittest.TestCase):
+    def test_gte_boundary(self):
+        self.assertTrue(_rubygems_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_rubygems_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_lt_boundary(self):
+        self.assertTrue(_rubygems_satisfies_clause("1.9.9", "<2.0.0"))
+        self.assertFalse(_rubygems_satisfies_clause("2.0.0", "<2.0.0"))
+
+    def test_bare_version_is_exact_match(self):
+        self.assertTrue(_rubygems_satisfies_clause("1.2.3", "1.2.3"))
+        self.assertFalse(_rubygems_satisfies_clause("1.2.4", "1.2.3"))
+
+    def test_rubygems_satisfies_ands_comma_separated_clauses(self):
+        self.assertTrue(_rubygems_satisfies("1.5.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_rubygems_satisfies("2.0.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_rubygems_satisfies("1.0.0", ">=1.2.3,<2.0.0"))
+
+
+class VersionVulnerabilityRubyGemsTests(unittest.TestCase):
+    def test_fixed_in_version_uses_rubygems_ordering(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-RG-1", source="osv", fixed_in_version="1.2.3")
+        self.assertTrue(vuln.is_current_version_vulnerable("1.2.2", ecosystem="rubygems"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.2.3", ecosystem="rubygems"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.5.0", ecosystem="rubygems"))
+
+    def test_version_outside_range_is_not_flagged(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-RG-2", source="osv", affected_versions=[">=1.2.3,<2.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="rubygems"))
+
+    def test_prerelease_sorts_below_its_release(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-RG-3", source="osv", affected_versions=["<1.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("1.0.0.rc1", ecosystem="rubygems"))
 
 
 class VersionVulnerabilityNpmTests(unittest.TestCase):

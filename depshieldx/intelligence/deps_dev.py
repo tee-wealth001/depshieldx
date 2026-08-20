@@ -21,6 +21,7 @@ DEPS_DEV_SYSTEM_NAMES = {
     "go": "go",
     "maven": "maven",
     "nuget": "nuget",
+    "rubygems": "rubygems",
 }
 
 

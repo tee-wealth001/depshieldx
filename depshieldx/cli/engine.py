@@ -133,24 +133,24 @@ def _uninstall_args_for_input_source(input_source, ecosystem):
     if input_source.source_type == "requirements":
         return input_source.pip_args[:]
 
-    if input_source.source_type == "lockfile" and ecosystem.name in ("npm", "cargo", "go", "nuget", "pub"):
-        # npm/yarn/pnpm, Cargo, go.sum, packages.lock.json, and
-        # pubspec.lock lockfiles pass their raw path through as the sole
-        # requested target (each ecosystem's resolve() reads the
+    if input_source.source_type == "lockfile" and ecosystem.name in ("npm", "cargo", "go", "nuget", "pub", "rubygems"):
+        # npm/yarn/pnpm, Cargo, go.sum, packages.lock.json, pubspec.lock,
+        # and Gemfile.lock lockfiles pass their raw path through as the
+        # sole requested target (each ecosystem's resolve() reads the
         # lockfile/its sibling manifest directly) -- unlike uv.lock,
         # which is pre-parsed into name==version strings by
         # input_sources.py, so this only applies to ecosystems whose own
         # adapter reads the lockfile itself. packages.lock.json's own
-        # "type": "Direct" field and pubspec.lock's own "dependency":
-        # "direct ..." field both make this self-contained, no sibling
-        # manifest read needed the way Cargo.toml/go.mod are for their
-        # own ecosystems.
+        # "type": "Direct" field, pubspec.lock's own "dependency":
+        # "direct ..." field, and Gemfile.lock's own "DEPENDENCIES"
+        # section all make this self-contained, no sibling manifest read
+        # needed the way Cargo.toml/go.mod are for their own ecosystems.
         return ecosystem.direct_dependency_names_for_lockfile(input_source.requested_targets[0])
 
     package_names = []
     seen = set()
     for target in input_source.requested_targets:
-        if ecosystem.name in ("npm", "cargo", "go", "maven", "nuget", "pub"):
+        if ecosystem.name in ("npm", "cargo", "go", "maven", "nuget", "pub", "rubygems"):
             # _package_name_from_requirement is PyPI-shaped (name==version,
             # name[extra]) and actively rejects anything containing "/",
             # which would break scoped npm packages like "@babel/core" --
@@ -158,8 +158,9 @@ def _uninstall_args_for_input_source(input_source, ecosystem):
             # npm's/cargo's/go's own "name@version" stripping already
             # exists in ecosystems/base.py and handles this correctly per
             # ecosystem. Maven coordinates ("groupId:artifactId:version"),
-            # NuGet's "PackageId@version", and Pub's "package_name@version"
-            # targets get the same treatment for the same reason.
+            # NuGet's "PackageId@version", Pub's "package_name@version",
+            # and RubyGems' "gem_name@version" targets get the same
+            # treatment for the same reason.
             package_name = _strip_version_spec(target, ecosystem.name).strip()
         else:
             package_name = _package_name_from_requirement(target) or target.strip()

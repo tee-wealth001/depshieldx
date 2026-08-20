@@ -42,7 +42,7 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
     # so it gets the same folding as PyPI.
     if ecosystem in ("pypi", "cargo"):
         return _normalize_pypi_name(name)
-    if ecosystem in ("go", "maven", "nuget", "pub"):
+    if ecosystem in ("go", "maven", "nuget", "pub", "rubygems"):
         # Go module paths are case-sensitive canonical identifiers
         # (confirmed directly against go.dev/ref/mod's module-path rules)
         # -- unlike every other ecosystem here, lowercasing would fold
@@ -76,6 +76,11 @@ def _normalize_name_for_ecosystem(name: str, ecosystem: str) -> str:
         # case packages grandfathered in from before the convention was
         # enforced), so case is preserved rather than folded, the same
         # "case genuinely matters, don't fold it" treatment as Go/Maven.
+        # RubyGems gem names are case-sensitive too (confirmed directly:
+        # a real lowercase "json" resolves, the uppercase "JSON" 404s),
+        # and OSV/GHSA/deps.dev all key RubyGems entries by that exact
+        # casing (confirmed directly against real query responses), so
+        # they get the same "preserve, don't fold" treatment.
         return name.strip() if name else ""
     return name.strip().lower() if name else ""
 
@@ -91,12 +96,12 @@ def _strip_version_spec(target: str, ecosystem: str) -> str:
         search_from = 1 if target.startswith("@") else 0
         at_index = target.find("@", search_from)
         return target[:at_index] if at_index != -1 else target
-    if ecosystem in ("cargo", "go", "nuget", "pub"):
+    if ecosystem in ("cargo", "go", "nuget", "pub", "rubygems"):
         # "serde@=1.0.219" -> "serde"; "github.com/pkg/errors@v0.9.1" ->
         # "github.com/pkg/errors"; "Newtonsoft.Json@13.0.3" ->
-        # "Newtonsoft.Json"; "http@1.6.0" -> "http" -- crate/module/
-        # package names have no scoping prefix to skip past, unlike npm's
-        # "@scope/name".
+        # "Newtonsoft.Json"; "http@1.6.0" -> "http"; "rack@3.2.7" ->
+        # "rack" -- crate/module/package/gem names have no scoping prefix
+        # to skip past, unlike npm's "@scope/name".
         at_index = target.find("@")
         return target[:at_index] if at_index != -1 else target
     if ecosystem == "maven":
@@ -145,6 +150,7 @@ def package_records(ecosystem: str, resolution: ResolutionResult) -> list[Packag
                     "maven": "repo1.maven.org",
                     "nuget": "nuget.org",
                     "pub": "pub.dev",
+                    "rubygems": "rubygems.org",
                 }.get(ecosystem),
                 purl=purl,
                 digest=digest,

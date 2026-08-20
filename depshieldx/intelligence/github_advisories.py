@@ -22,6 +22,7 @@ GITHUB_ADVISORY_ECOSYSTEM_NAMES = {
     "maven": "maven",
     "nuget": "nuget",
     "pub": "pub",
+    "rubygems": "rubygems",
 }
 
 

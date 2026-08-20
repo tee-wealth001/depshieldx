@@ -4,7 +4,14 @@ import subprocess
 
 import click
 
-from ...ecosystems import resolve_cargo_tool, resolve_dart_tool, resolve_dotnet_tool, resolve_go_tool, resolve_node_tool
+from ...ecosystems import (
+    resolve_bundle_tool,
+    resolve_cargo_tool,
+    resolve_dart_tool,
+    resolve_dotnet_tool,
+    resolve_go_tool,
+    resolve_node_tool,
+)
 from ...core.routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
 from ...core.runtime import pip_command, self_invoke_command
 from ..engine import _show_routing_enabled_message
@@ -326,6 +333,60 @@ def route_dart(dart_args):
     raise SystemExit(result.returncode)
 
 
+def _extract_simple_bundle_add_targets(args):
+    # Mirrors _extract_simple_cargo_add_targets/_extract_simple_go_get_
+    # targets for the common multi-gem, no-flags case, and
+    # _extract_simple_dotnet_add_package_target's single-target
+    # "--version" shape for the other -- `bundle add gem1 gem2 --version
+    # X` applies ONE shared version constraint to EVERY named gem
+    # (confirmed directly against real `bundle add` behavior, see
+    # ecosystems/rubygems/ecosystem.py's module docstring), so a version
+    # flag is only interceptable together with exactly one gem name;
+    # anything else (multiple gems with a shared --version, or any other
+    # flag) bails out and passes through untouched rather than risk
+    # misinterpreting it -- the same "don't risk misinterpreting a real
+    # shape" caution NuGet's/Pub's own extractors already use.
+    if not args or args[0] != "add":
+        return None
+    remaining = args[1:]
+    if not remaining:
+        return None
+
+    if all(not arg.startswith("-") for arg in remaining):
+        return list(remaining)
+
+    if (
+        len(remaining) == 3
+        and not remaining[0].startswith("-")
+        and remaining[1] == "--version"
+        and not remaining[2].startswith("-")
+    ):
+        return [f"{remaining[0]}@{remaining[2]}"]
+
+    return None
+
+
+@click.argument("bundle_args", nargs=-1, type=click.UNPROCESSED)
+def route_bundle(bundle_args):
+    """Internal helper used by the optional bundle shim."""
+    args = list(bundle_args)
+    gem_targets = _extract_simple_bundle_add_targets(args)
+    if gem_targets:
+        click.echo("Routing bundle add through depshieldx...")
+        command = self_invoke_command(["install", *gem_targets, "--ecosystem", "rubygems"])
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
+    click.secho(
+        "depshieldx routing only intercepts a plain 'bundle add <gem...>' or "
+        "'bundle add <gem> --version <version>' with no other flags. Passing through to bundle.",
+        fg="yellow",
+        err=True,
+    )
+    result = subprocess.run([resolve_bundle_tool("bundle"), *args], check=False)
+    raise SystemExit(result.returncode)
+
+
 def register(cli):
     cli.add_command(routing)
     cli.command("route-pip", hidden=True, context_settings={"ignore_unknown_options": True})(route_pip)
@@ -336,3 +397,4 @@ def register(cli):
     cli.command("route-go", hidden=True, context_settings={"ignore_unknown_options": True})(route_go)
     cli.command("route-dotnet", hidden=True, context_settings={"ignore_unknown_options": True})(route_dotnet)
     cli.command("route-dart", hidden=True, context_settings={"ignore_unknown_options": True})(route_dart)
+    cli.command("route-bundle", hidden=True, context_settings={"ignore_unknown_options": True})(route_bundle)
