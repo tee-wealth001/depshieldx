@@ -14,13 +14,32 @@ under an extra "depshieldx/" prefix) reproduces a real FileNotFoundError in
 
 import os
 
+from PyInstaller.utils.hooks import collect_data_files
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(SPEC)))
+
+# sigstore._store bundles the real Sigstore/sigstage TUF trust-root JSON
+# files (root.json/signing_config.v0.2.json/trusted_root.json) that
+# sigstore._utils reads via `importlib.resources.files("sigstore._store")`
+# -- a dynamic, string-based lookup PyInstaller's static import analysis
+# can't trace. Confirmed directly this makes a real frozen build raise
+# "No module named 'sigstore._store'" the moment any PyPI attestation
+# verification is actually attempted (not just "unavailable" -- a real,
+# confirmed-directly false-positive HARD BLOCK: the verification_failure
+# signal from a missing module is otherwise indistinguishable from a
+# genuine cryptographic failure), and confirmed directly this specific
+# fix -- collect_data_files scoped to "sigstore._store" with
+# include_py_files=True, so the package's own __init__.py lands on disk
+# at sys._MEIPASS alongside its real JSON data siblings, all from the
+# same real filesystem location -- resolves it end to end in a real
+# frozen build (verified attestations succeed again, no error).
+SIGSTORE_STORE_DATAS = collect_data_files("sigstore._store", include_py_files=True)
 
 a = Analysis(
     [os.path.join(REPO_ROOT, "packaging", "entry.py")],
     pathex=[REPO_ROOT],
     binaries=[],
-    datas=[
+    datas=SIGSTORE_STORE_DATAS + [
         (os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "sandbox_wrapper.py"), "security/sandbox"),
         (os.path.join(REPO_ROOT, "depshieldx", "security", "sandbox", "sandbox_wrapper_npm.js"), "security/sandbox"),
         (
