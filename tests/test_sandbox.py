@@ -86,7 +86,7 @@ class SandboxHelpersTests(unittest.TestCase):
             stderr="",
         )
 
-        result = run_sandbox("flask", cache_enabled=False)
+        result = run_sandbox("flask", cache_enabled=False, require_docker=False)
 
         self.assertTrue(result.success)
         self.assertEqual(result.error, None)
@@ -160,6 +160,25 @@ class SandboxHelpersTests(unittest.TestCase):
         mock_prepare_bundle,
     ):
         result = run_sandbox("flask", cache_enabled=False, require_docker=True)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "environment")
+        self.assertEqual(result.isolation["backend"], "docker")
+        mock_prepare_bundle.assert_not_called()
+
+    @patch("depshieldx.sandbox.prepare_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(False, "docker offline"))
+    def test_require_docker_defaults_to_true_not_a_silent_local_fallback(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+    ):
+        """require_docker used to default to False, so a caller who didn't
+        think about it got the weaker local_subprocess backend (host-process
+        execution, no real container isolation) silently by omission.
+        Secure by default now: the same call without an explicit
+        require_docker=False must behave exactly like require_docker=True."""
+        result = run_sandbox("flask", cache_enabled=False)
 
         self.assertFalse(result.success)
         self.assertEqual(result.error_type, "environment")

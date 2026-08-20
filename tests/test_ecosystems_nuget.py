@@ -34,6 +34,59 @@ class NormalizeTargetPackageTests(unittest.TestCase):
             _normalize_target_package("@13.0.3")
 
 
+class FetchArtifactChecksumTests(unittest.TestCase):
+    """A real mismatch already raised before this fix (see
+    module docstring history); this covers the previously-silent case
+    where checksum metadata is simply missing -- fetch_artifact used to
+    write the bytes to disk completely unverified, with zero signal."""
+
+    @patch("depshieldx.ecosystems.nuget.ecosystem.requests.get")
+    def test_missing_checksum_metadata_raises_instead_of_silently_skipping(self, mock_get):
+        mock_get.return_value = MagicMock(content=b"fake-nupkg-bytes", raise_for_status=lambda: None)
+        artifact = {
+            "url": "https://api.nuget.org/v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg",
+            "filename": "demo.1.0.0.nupkg",
+            "checksum_algorithm": None,
+            "checksum": None,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(RuntimeError):
+                NUGET_ECOSYSTEM.fetch_artifact(artifact, Path(temp_dir))
+            self.assertFalse((Path(temp_dir) / "demo.1.0.0.nupkg").exists())
+
+    @patch("depshieldx.ecosystems.nuget.ecosystem.requests.get")
+    def test_checksum_mismatch_raises(self, mock_get):
+        mock_get.return_value = MagicMock(content=b"fake-nupkg-bytes", raise_for_status=lambda: None)
+        artifact = {
+            "url": "https://api.nuget.org/v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg",
+            "filename": "demo.1.0.0.nupkg",
+            "checksum_algorithm": "SHA512",
+            "checksum": "not-the-real-hash",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(RuntimeError):
+                NUGET_ECOSYSTEM.fetch_artifact(artifact, Path(temp_dir))
+
+    @patch("depshieldx.ecosystems.nuget.ecosystem.requests.get")
+    def test_matching_checksum_writes_the_file(self, mock_get):
+        import base64
+        import hashlib
+
+        artifact_bytes = b"fake-nupkg-bytes"
+        digest = hashlib.sha512(artifact_bytes).digest()
+        mock_get.return_value = MagicMock(content=artifact_bytes, raise_for_status=lambda: None)
+        artifact = {
+            "url": "https://api.nuget.org/v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg",
+            "filename": "demo.1.0.0.nupkg",
+            "checksum_algorithm": "SHA512",
+            "checksum": base64.b64encode(digest).decode("ascii"),
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = NUGET_ECOSYSTEM.fetch_artifact(artifact, Path(temp_dir))
+            self.assertTrue(destination.exists())
+            self.assertEqual(destination.read_bytes(), artifact_bytes)
+
+
 class BuildScratchCsprojTests(unittest.TestCase):
     def test_includes_every_package_as_exact_pinned_reference(self):
         csproj = _build_scratch_csproj([("Newtonsoft.Json", "13.0.3")])

@@ -991,7 +991,7 @@ def run_sandbox(
     keep_bundle: bool = False,
     cache_enabled: bool = True,
     verbose: bool = False,
-    require_docker: bool = False,
+    require_docker: bool = True,
     block_on_static_analysis: bool = True,
     block_on_trivy: bool = False,
     ecosystem=PYPI_ECOSYSTEM,
@@ -999,11 +999,17 @@ def run_sandbox(
     """
     Test-install a package offline inside an isolated Docker container.
 
-    npm support (ecosystem=NPM_ECOSYSTEM) only targets the Docker backend --
-    the local_subprocess fallback below is pip/sandbox_wrapper.py-specific
-    and, in practice, unreachable from the real CLI flow anyway: cli/engine.py's
-    _run_deep_flow always calls this with require_docker=True, which returns
-    before the fallback branch is ever taken, for either ecosystem.
+    npm/Cargo/Go/Maven/NuGet support (ecosystem=NPM_ECOSYSTEM etc.) only
+    target the Docker backend -- the local_subprocess fallback below is
+    pip/sandbox_wrapper.py-specific. It's also, in practice, unreachable
+    from the real CLI flow anyway: cli/engine.py's _run_deep_flow always
+    calls this with require_docker=True explicitly, which returns before
+    the fallback branch is ever taken, for every ecosystem. require_docker
+    defaults to True here too (secure by default) -- the local_subprocess
+    backend runs on the bare host with only sandbox_wrapper.py's own
+    in-process sys.addaudithook guards, not real OS-level container
+    isolation, so a caller has to opt into that explicitly rather than
+    silently getting it by omission.
     """
     is_npm = ecosystem.name == "npm"
     is_cargo = ecosystem.name == "cargo"

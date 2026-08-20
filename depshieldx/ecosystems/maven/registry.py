@@ -55,10 +55,16 @@ work, not a gap to paper over now.
 """
 
 import json
-import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Parses real, remote POM XML (Maven Central will serve whatever a publisher
+# uploaded) -- plain xml.etree.ElementTree has no protection against a
+# billion-laughs/quadratic-blowup entity-expansion DoS. defusedxml's
+# drop-in fromstring() (forbid_entities=True by default) rejects any
+# <!ENTITY> declaration outright instead of expanding it; a real Maven POM
+# never legitimately declares one.
+import defusedxml.ElementTree as ET
 import requests
 
 from ...storage.cache import get_cache_root

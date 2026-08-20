@@ -268,13 +268,14 @@ def _normalize_nuget_version(version: str) -> str:
     (confirmed directly against a real GHSA-59j7-ghrg-fj52 range) meaning
     "no meaningful lower bound" -- strict semver.Version.parse() rejects
     both shapes outright. A 4th+ numeric segment is folded into semver's
-    build-metadata field (ignored for precedence -- a real, accepted
-    simplification: NuGet's own comparer *does* consider a 4th segment
-    significant, but two releases differing only in a 4th-segment
-    "revision" is a narrow edge case for a vulnerability-boundary check,
-    which almost always differs at major/minor/patch -- confirmed
-    directly every real range fetched during development does). A
-    version with fewer than 3 numeric segments is zero-padded up to 3.
+    build-metadata field here (SemVer 2.0.0's own precedence rules
+    explicitly ignore build-metadata, so semver.Version's own comparison
+    operators alone would treat e.g. "1.0.0.1" and "1.0.0.2" as exactly
+    equal) -- _nuget_compare reads it back out and applies it as a real
+    numeric tie-breaker only when the major/minor/patch/prerelease
+    comparison is otherwise a tie, matching NuGet's own comparer
+    treating a 4th-segment revision as significant. A version with
+    fewer than 3 numeric segments is zero-padded up to 3.
     The prerelease suffix (from the first "-" onward, if any) is passed
     through unchanged -- confirmed directly real examples like "7.0.0-
     preview" and "5.0.0-beta7-208241120" already parse as one valid
@@ -295,13 +296,69 @@ def _normalize_nuget_version(version: str) -> str:
     return normalized + suffix
 
 
+def _nuget_revision_segments(build: str | None) -> tuple[int, ...]:
+    """Parses the 4th+ numeric segment(s) _normalize_nuget_version folds
+    into semver build-metadata back into real integers for tie-breaking
+    (see _nuget_compare). Defensively returns () -- "no usable revision
+    data" -- rather than raising, for the one real, confirmed-directly
+    edge case where this string isn't purely numeric: a version with
+    both a 4th segment *and* a prerelease suffix normalizes to
+    "X.Y.Z+<revision>-<prerelease>" (build-metadata's "+" extends to the
+    end of the string per SemVer 2.0.0, so the prerelease's leading "-"
+    ends up folded into .build instead of being parsed separately) --
+    a real, narrower pre-existing quirk of _normalize_nuget_version this
+    tie-breaker deliberately doesn't try to also fix, since no real
+    4-segment range boundary encountered during development combined
+    both."""
+    if not build:
+        return ()
+    try:
+        return tuple(int(part) for part in build.split("."))
+    except ValueError:
+        return ()
+
+
+def _nuget_compare(version: str, boundary: str) -> int | None:
+    """Full ordering comparison for two NuGet version strings, returning
+    -1/0/1 (or None if either fails to parse). SemVer 2.0.0 has no
+    precedence rule for build-metadata -- it's explicitly excluded from
+    comparison -- so relying on semver.Version's own ordering alone
+    means two versions differing only in the 4th+ segment
+    _normalize_nuget_version folds into .build (e.g. "1.0.0.1" vs
+    "1.0.0.2") compare as exactly equal, confirmed directly. This adds
+    that segment back in as a real, numeric tie-breaker only when
+    semver's own major/minor/patch/prerelease comparison is otherwise a
+    tie, matching NuGet's own comparer treating the revision as
+    significant."""
+    try:
+        current = semver.Version.parse(_normalize_nuget_version(version))
+        target = semver.Version.parse(_normalize_nuget_version(boundary))
+    except ValueError:
+        return None
+
+    base_comparison = current.compare(target)
+    if base_comparison != 0:
+        return base_comparison
+
+    current_revision = _nuget_revision_segments(current.build)
+    target_revision = _nuget_revision_segments(target.build)
+    length = max(len(current_revision), len(target_revision))
+    current_revision += (0,) * (length - len(current_revision))
+    target_revision += (0,) * (length - len(target_revision))
+    if current_revision < target_revision:
+        return -1
+    if current_revision > target_revision:
+        return 1
+    return 0
+
+
 def _nuget_satisfies_clause(version: str, clause: str) -> bool:
     """True if `version` satisfies one "<op><boundary>" clause, using
-    real SemVer 2.0.0 ordering (via _normalize_nuget_version) -- mirrors
-    the cargo/go branches' identical "bare version = exact match"
-    convention. Verified directly against real OSV NuGet advisory data
-    (Microsoft.IdentityModel.JsonWebTokens' GHSA-59j7-ghrg-fj52 and
-    related ranges)."""
+    real SemVer 2.0.0 ordering plus a 4th-segment revision tie-breaker
+    (via _nuget_compare) -- mirrors the cargo/go branches' identical
+    "bare version = exact match" convention. Verified directly against
+    real OSV NuGet advisory data (Microsoft.IdentityModel.
+    JsonWebTokens' GHSA-59j7-ghrg-fj52 and related ranges)."""
     clause = clause.strip()
     for prefix in (">=", "<=", "==", ">", "<"):
         if clause.startswith(prefix):
@@ -310,21 +367,19 @@ def _nuget_satisfies_clause(version: str, clause: str) -> bool:
     else:
         operator, boundary = "==", clause
 
-    try:
-        current = semver.Version.parse(_normalize_nuget_version(version))
-        target = semver.Version.parse(_normalize_nuget_version(boundary))
-    except ValueError:
+    comparison = _nuget_compare(version, boundary)
+    if comparison is None:
         return False
 
     if operator == ">=":
-        return current >= target
+        return comparison >= 0
     if operator == "<=":
-        return current <= target
+        return comparison <= 0
     if operator == ">":
-        return current > target
+        return comparison > 0
     if operator == "<":
-        return current < target
-    return current == target
+        return comparison < 0
+    return comparison == 0
 
 
 def _nuget_satisfies(version: str, spec: str) -> bool:
