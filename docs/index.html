@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>depshieldx – Secure Package Management for PyPI, npm, Cargo, Go, Maven, NuGet, Pub &amp; RubyGems</title>
+  <title>depshieldx – Secure Package Management for PyPI, npm, Cargo, Go, Maven, NuGet, Pub, RubyGems &amp; Composer</title>
   <meta
     name="description"
-    content="Safer package install and scan workflows for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, and RubyGems/rubygems.org, with cryptographic provenance checks, CVE lookups, Docker plus Trivy deep mode with behavioral tracing, and signed receipts."
+    content="Safer package install and scan workflows for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, RubyGems/rubygems.org, and Composer/Packagist, with cryptographic provenance checks, CVE lookups, Docker plus Trivy deep mode with behavioral tracing, and signed receipts."
   />
   <style>
     * {
@@ -683,8 +683,8 @@
         <div class="hero-content">
           <div class="hero-text">
             <div class="badge">Security-First Package Management</div>
-            <h1>Install PyPI, npm, Cargo, Go, Maven, NuGet, Pub, and RubyGems packages with confidence</h1>
-            <p>depshieldx adds a security gate in front of your package installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, and RubyGems/rubygems.org alike. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
+            <h1>Install PyPI, npm, Cargo, Go, Maven, NuGet, Pub, RubyGems, and Composer packages with confidence</h1>
+            <p>depshieldx adds a security gate in front of your package installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, RubyGems/rubygems.org, and Composer/Packagist alike. Resolve dependencies, verify provenance, scan for vulnerabilities, and get signed receipts—all before installing to your system.</p>
             <div class="cta-buttons">
               <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
                 <span>Get Started</span>
@@ -732,10 +732,10 @@
           <div class="feature-card">
             <div class="feature-icon">🔍</div>
             <h3>Deep Dependency Analysis</h3>
-            <p>Resolves and checks your entire dependency tree, not just the package you're installing -- for PyPI, npm/yarn/pnpm, Cargo, Go, Maven, NuGet, Pub, or RubyGems.</p>
+            <p>Resolves and checks your entire dependency tree, not just the package you're installing -- for PyPI, npm/yarn/pnpm, Cargo, Go, Maven, NuGet, Pub, RubyGems, or Composer.</p>
             <ul>
               <li>Full resolved package versions</li>
-              <li>Cryptographic provenance for PyPI, npm, Maven, NuGet, Pub &amp; RubyGems; structural checks for Cargo &amp; Go</li>
+              <li>Cryptographic provenance for PyPI, npm, Maven, NuGet, Pub, RubyGems &amp; Composer (checksum-based); structural checks for Cargo &amp; Go</li>
               <li>Real Sigstore attestation verification</li>
             </ul>
           </div>
@@ -753,7 +753,7 @@
           <div class="feature-card">
             <div class="feature-icon">🐳</div>
             <h3>Docker Sandbox Testing</h3>
-            <p>Run installations in an isolated Docker environment before touching your system, for PyPI, npm/yarn/pnpm, Cargo, Go, Maven, NuGet, Pub, or RubyGems.</p>
+            <p>Run installations in an isolated Docker environment before touching your system, for PyPI, npm/yarn/pnpm, Cargo, Go, Maven, NuGet, Pub, RubyGems, or Composer.</p>
             <ul>
               <li>Real behavioral tracing of the install</li>
               <li>Trivy deep scanning</li>
@@ -834,7 +834,7 @@
           <div class="mode-card deep">
             <div class="mode-badge">DEEP MODE</div>
             <h3>🔒 Deep Mode</h3>
-            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system -- for PyPI, npm/yarn/pnpm, Cargo, Go, Maven, NuGet, Pub, or RubyGems.</p>
+            <p>For critical packages and production deployments. Runs the same fast checks, then installs inside Docker and scans with Trivy before touching your system -- for PyPI, npm/yarn/pnpm, Cargo, Go, Maven, NuGet, Pub, RubyGems, or Composer.</p>
             <p style="font-size: 0.9rem; color: var(--text-muted);">Maximum security with full isolation and behavioral analysis.</p>
             <div class="code-example">depshieldx install requests --deep</div>
           </div>
@@ -885,6 +885,9 @@
             <div class="command-item">
               <code>install rack --ecosystem rubygems --deep</code>
             </div>
+            <div class="command-item">
+              <code>install monolog/monolog --ecosystem composer --deep</code>
+            </div>
           </div>
           <div class="command-card">
             <h3>Receipts & Local UI</h3>
@@ -930,7 +933,7 @@
     <section class="cta-section">
       <div class="container">
         <h2>Ready to secure your packages?</h2>
-        <p>Join developers who are taking control of their supply chain security, for PyPI, npm, Cargo, Go, Maven, NuGet, Pub, and RubyGems alike. Get started with depshieldx today.</p>
+        <p>Join developers who are taking control of their supply chain security, for PyPI, npm, Cargo, Go, Maven, NuGet, Pub, RubyGems, and Composer alike. Get started with depshieldx today.</p>
         <div class="cta-buttons" style="justify-content: center;">
           <a class="button button-primary" href="https://github.com/tee-wealth001/depshieldx">
             View on GitHub
