@@ -92,13 +92,14 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
                 with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake-depshieldx-install"]
                     with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                        mock_run.return_value.returncode = 0
-                        runner = CliRunner()
-                        result = runner.invoke(cli, ["route-npm", "install"])
+                        with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                            mock_run.return_value.returncode = 0
+                            runner = CliRunner()
+                            result = runner.invoke(cli, ["route-npm", "install"])
 
         self.assertEqual(result.exit_code, 0)
         mock_self_invoke.assert_called_once_with(["install", "--lockfile", str(lockfile)])
-        mock_run.assert_called_once_with(["echo", "fake-depshieldx-install"], check=False)
+        mock_run.assert_called_once_with(["echo", "fake-depshieldx-install"], check=False, env={"FAKE_ENV": "1"})
 
     def test_route_npm_installs_named_package_through_depshieldx(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -108,13 +109,14 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
                 with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
                     mock_self_invoke.return_value = ["echo", "fake-depshieldx-install"]
                     with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                        mock_run.return_value.returncode = 0
-                        runner = CliRunner()
-                        result = runner.invoke(cli, ["route-npm", "install", "left-pad"])
+                        with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                            mock_run.return_value.returncode = 0
+                            runner = CliRunner()
+                            result = runner.invoke(cli, ["route-npm", "install", "left-pad"])
 
         self.assertEqual(result.exit_code, 0)
         mock_self_invoke.assert_called_once_with(["install", "left-pad", "--ecosystem", "npm"])
-        mock_run.assert_called_once_with(["echo", "fake-depshieldx-install"], check=False)
+        mock_run.assert_called_once_with(["echo", "fake-depshieldx-install"], check=False, env={"FAKE_ENV": "1"})
 
     def test_route_npm_installs_multiple_named_packages_through_depshieldx(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -134,12 +136,15 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
             with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
                 with patch("depshieldx.cli.commands.routing.resolve_node_tool", return_value="/usr/bin/npm"):
                     with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                        mock_run.return_value.returncode = 0
-                        runner = CliRunner()
-                        result = runner.invoke(cli, ["route-npm", "install", "left-pad", "--save-dev"])
+                        with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                            mock_run.return_value.returncode = 0
+                            runner = CliRunner()
+                            result = runner.invoke(cli, ["route-npm", "install", "left-pad", "--save-dev"])
 
         self.assertEqual(result.exit_code, 0)
-        mock_run.assert_called_once_with(["/usr/bin/npm", "install", "left-pad", "--save-dev"], check=False)
+        mock_run.assert_called_once_with(
+            ["/usr/bin/npm", "install", "left-pad", "--save-dev"], check=False, env={"FAKE_ENV": "1"}
+        )
 
     def test_route_yarn_passes_through_when_naming_a_package(self):
         # Ad-hoc resolution is npm-specific in this phase -- yarn/pnpm named
@@ -149,24 +154,28 @@ class RouteNpmFamilyCommandTests(unittest.TestCase):
             with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
                 with patch("depshieldx.cli.commands.routing.resolve_node_tool", return_value="/usr/bin/yarn"):
                     with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                        mock_run.return_value.returncode = 0
-                        runner = CliRunner()
-                        result = runner.invoke(cli, ["route-yarn", "install", "left-pad"])
+                        with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                            mock_run.return_value.returncode = 0
+                            runner = CliRunner()
+                            result = runner.invoke(cli, ["route-yarn", "install", "left-pad"])
 
         self.assertEqual(result.exit_code, 0)
-        mock_run.assert_called_once_with(["/usr/bin/yarn", "install", "left-pad"], check=False)
+        mock_run.assert_called_once_with(
+            ["/usr/bin/yarn", "install", "left-pad"], check=False, env={"FAKE_ENV": "1"}
+        )
 
     def test_route_npm_passes_through_when_no_lockfile_present(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch("depshieldx.cli.commands.routing.Path.cwd", return_value=Path(temp_dir)):
                 with patch("depshieldx.cli.commands.routing.resolve_node_tool", return_value="/usr/bin/npm"):
                     with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                        mock_run.return_value.returncode = 0
-                        runner = CliRunner()
-                        result = runner.invoke(cli, ["route-npm", "install"])
+                        with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                            mock_run.return_value.returncode = 0
+                            runner = CliRunner()
+                            result = runner.invoke(cli, ["route-npm", "install"])
 
         self.assertEqual(result.exit_code, 0)
-        mock_run.assert_called_once_with(["/usr/bin/npm", "install"], check=False)
+        mock_run.assert_called_once_with(["/usr/bin/npm", "install"], check=False, env={"FAKE_ENV": "1"})
 
     def test_route_yarn_uses_yarn_lock(self):
         with tempfile.TemporaryDirectory() as temp_dir:

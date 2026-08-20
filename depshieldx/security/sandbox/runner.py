@@ -39,7 +39,7 @@ from ...ecosystems.pub.ecosystem import _build_scratch_pubspec, resolve_dart_too
 from ...ecosystems.rubygems.ecosystem import _build_scratch_gemfile
 from ...ecosystems.rubygems.lockfiles import write_gemfile_lock
 from ...core.resolver import ResolutionResult
-from ...core.runtime import pip_command, resource_path, system_python_executable
+from ...core.runtime import pip_command, resource_path, subprocess_env, system_python_executable
 from ..trivy import scan_filesystem
 
 DOCKER_IMAGE = "python:3.11"
@@ -146,6 +146,7 @@ def _run_command(command: List[str], verbose: bool = False) -> subprocess.Comple
             command,
             check=True,
             capture_output=True,
+            env=subprocess_env(),
             **TEXT_SUBPROCESS_KWARGS,
         )
     except subprocess.CalledProcessError as exc:
@@ -265,6 +266,7 @@ def _docker_daemon_available() -> tuple[bool, Optional[str]]:
             ["docker", "info"],
             check=True,
             capture_output=True,
+            env=subprocess_env(),
             **TEXT_SUBPROCESS_KWARGS,
         )
         return True, None
@@ -283,6 +285,7 @@ def _ensure_npm_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", NPM_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -307,6 +310,7 @@ def _ensure_cargo_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", CARGO_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -332,6 +336,7 @@ def _ensure_go_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", GO_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -357,6 +362,7 @@ def _ensure_maven_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", MAVEN_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -383,6 +389,7 @@ def _ensure_nuget_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", NUGET_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -409,6 +416,7 @@ def _ensure_pub_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", PUB_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -434,6 +442,7 @@ def _ensure_rubygems_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", RUBYGEMS_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -459,6 +468,7 @@ def _ensure_composer_sandbox_image(verbose: bool = False) -> None:
     inspect = subprocess.run(
         ["docker", "image", "inspect", COMPOSER_SANDBOX_IMAGE_TAG],
         capture_output=True,
+        env=subprocess_env(),
         **TEXT_SUBPROCESS_KWARGS,
     )
     if inspect.returncode == 0:
@@ -1028,6 +1038,7 @@ def prepare_nuget_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
             cwd=temp_dir,
             capture_output=True,
             text=True,
+            env=subprocess_env(),
         )
         if lock_file_result.returncode != 0:
             detail = (lock_file_result.stderr or lock_file_result.stdout or "").strip()
@@ -1107,7 +1118,7 @@ def prepare_pub_download_bundle(ecosystem, resolved_versions: dict[str, str]) ->
         pubspec_path = Path(temp_dir) / "pubspec.yaml"
         pubspec_path.write_bytes(_build_scratch_pubspec(list(resolved_versions.items())).encode("utf-8"))
 
-        env = dict(os.environ)
+        env = subprocess_env()
         env["PUB_CACHE"] = str(Path(temp_dir) / "pub-cache")
         lock_file_result = subprocess.run(
             [resolve_dart_tool("dart"), "pub", "get", "--offline"],
@@ -2011,6 +2022,7 @@ def run_sandbox(
                         ["docker", "rm", "--force", container_name],
                         capture_output=True,
                         timeout=30,
+                        env=subprocess_env(),
                     )
                 except Exception:
                     pass  # Container cleanup is best-effort

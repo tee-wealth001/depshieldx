@@ -930,8 +930,9 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Host install: blocked (scan)", result.output)
         mock_run_sandbox.assert_not_called()
 
+    @patch("depshieldx.cli.engine.subprocess_env", return_value={"FAKE_ENV": "1"})
     @patch("depshieldx.cli.engine.subprocess.run")
-    def test_run_cli_command_is_quiet_by_default(self, mock_run):
+    def test_run_cli_command_is_quiet_by_default(self, mock_run, _mock_subprocess_env):
         mock_run.return_value = subprocess.CompletedProcess(
             args=["pip", "install", "flask"],
             returncode=0,
@@ -947,10 +948,12 @@ class FormatSummaryTests(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
+            env={"FAKE_ENV": "1"},
         )
 
+    @patch("depshieldx.cli.engine.subprocess_env", return_value={"FAKE_ENV": "1"})
     @patch("depshieldx.cli.engine.subprocess.run")
-    def test_run_cli_command_streams_when_verbose(self, mock_run):
+    def test_run_cli_command_streams_when_verbose(self, mock_run, _mock_subprocess_env):
         mock_run.return_value = subprocess.CompletedProcess(
             args=["pip", "install", "flask"],
             returncode=0,
@@ -965,6 +968,7 @@ class FormatSummaryTests(unittest.TestCase):
             check=True,
             capture_output=False,
             text=False,
+            env={"FAKE_ENV": "1"},
         )
 
     def test_determine_exit_code_for_success_report(self):
@@ -1193,8 +1197,9 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertIn("Routing: enabled", result.output)
         self.assertIn("/tmp/shims/pip", result.output)
 
+    @patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"})
     @patch("depshieldx.cli.commands.routing.subprocess.run")
-    def test_route_pip_routes_simple_install_to_depshieldx(self, mock_run):
+    def test_route_pip_routes_simple_install_to_depshieldx(self, mock_run, _mock_subprocess_env):
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
 
         runner = CliRunner()
@@ -1204,6 +1209,7 @@ class FormatSummaryTests(unittest.TestCase):
         mock_run.assert_called_once_with(
             [sys.executable, "-m", "depshieldx.cli", "install", "flask"],
             check=False,
+            env={"FAKE_ENV": "1"},
         )
         self.assertIn("Routing pip install through depshieldx", result.output)
 

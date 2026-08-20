@@ -20,6 +20,7 @@ from ..core.routing import (
     get_routing_status,
     should_prompt_for_routing,
 )
+from ..core.runtime import subprocess_env
 from ..security.sandbox.runner import run_sandbox
 from ..security.scanner import scan_vulnerabilities
 from .output import (
@@ -39,6 +40,7 @@ def _run_cli_command(command, verbose=False):
         check=True,
         capture_output=not verbose,
         text=not verbose,
+        env=subprocess_env(),
     )
 
 

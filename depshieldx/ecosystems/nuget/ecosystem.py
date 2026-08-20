@@ -73,6 +73,7 @@ from .registry import (
     search_latest_version,
 )
 from ...core.resolver import ResolutionResult
+from ...core.runtime import subprocess_env
 
 # Current .NET LTS target framework (Long Term Support, supported through
 # Nov 2026, confirmed directly against Microsoft's own .NET support
@@ -98,7 +99,11 @@ def resolve_dotnet_tool(name: str) -> str:
 
 
 def _run(args: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    # env=subprocess_env() strips sys._MEIPASS back out of PATH before an
+    # external toolchain subprocess inherits it -- see core/runtime.py's
+    # module docstring for the real, confirmed DLL-resolution conflict
+    # this prevents.
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=subprocess_env())
 
 
 def _command_error(result: subprocess.CompletedProcess, action: str) -> str:

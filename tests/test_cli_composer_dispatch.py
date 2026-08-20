@@ -148,13 +148,14 @@ class RouteComposerTests(unittest.TestCase):
         with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
             mock_self_invoke.return_value = ["echo", "fake-depshieldx-install"]
             with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 0
-                runner = CliRunner()
-                result = runner.invoke(cli, ["route-composer", "require", "monolog/monolog"])
+                with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                    mock_run.return_value.returncode = 0
+                    runner = CliRunner()
+                    result = runner.invoke(cli, ["route-composer", "require", "monolog/monolog"])
 
         self.assertEqual(result.exit_code, 0)
         mock_self_invoke.assert_called_once_with(["install", "monolog/monolog", "--ecosystem", "composer"])
-        mock_run.assert_called_once_with(["echo", "fake-depshieldx-install"], check=False)
+        mock_run.assert_called_once_with(["echo", "fake-depshieldx-install"], check=False, env={"FAKE_ENV": "1"})
 
     def test_route_composer_requires_multiple_packages_with_versions_through_depshieldx(self):
         with patch("depshieldx.cli.commands.routing.self_invoke_command") as mock_self_invoke:
@@ -174,24 +175,28 @@ class RouteComposerTests(unittest.TestCase):
     def test_route_composer_passes_through_range_constraint(self):
         with patch("depshieldx.cli.commands.routing.resolve_composer_tool", return_value="/usr/local/bin/composer"):
             with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 0
-                runner = CliRunner()
-                result = runner.invoke(cli, ["route-composer", "require", "monolog/monolog:^3.0"])
+                with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                    mock_run.return_value.returncode = 0
+                    runner = CliRunner()
+                    result = runner.invoke(cli, ["route-composer", "require", "monolog/monolog:^3.0"])
 
         self.assertEqual(result.exit_code, 0)
         mock_run.assert_called_once_with(
-            ["/usr/local/bin/composer", "require", "monolog/monolog:^3.0"], check=False
+            ["/usr/local/bin/composer", "require", "monolog/monolog:^3.0"], check=False, env={"FAKE_ENV": "1"}
         )
 
     def test_route_composer_passes_through_other_subcommands(self):
         with patch("depshieldx.cli.commands.routing.resolve_composer_tool", return_value="/usr/local/bin/composer"):
             with patch("depshieldx.cli.commands.routing.subprocess.run") as mock_run:
-                mock_run.return_value.returncode = 0
-                runner = CliRunner()
-                result = runner.invoke(cli, ["route-composer", "install"])
+                with patch("depshieldx.cli.commands.routing.subprocess_env", return_value={"FAKE_ENV": "1"}):
+                    mock_run.return_value.returncode = 0
+                    runner = CliRunner()
+                    result = runner.invoke(cli, ["route-composer", "install"])
 
         self.assertEqual(result.exit_code, 0)
-        mock_run.assert_called_once_with(["/usr/local/bin/composer", "install"], check=False)
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/composer", "install"], check=False, env={"FAKE_ENV": "1"}
+        )
 
 
 if __name__ == "__main__":

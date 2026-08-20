@@ -69,6 +69,7 @@ from .registry import (
     find_version_info,
 )
 from ...core.resolver import ResolutionResult
+from ...core.runtime import subprocess_env
 
 _SCRATCH_PACKAGE_NAME = "depshieldx/scratch-resolve"
 
@@ -85,7 +86,14 @@ def resolve_composer_tool(name: str) -> str:
 
 
 def _run(args: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    # env=subprocess_env() is required, not cosmetic: confirmed directly
+    # against a real Windows release binary that composer -> php.exe
+    # otherwise inherits sys._MEIPASS on PATH from the frozen depshieldx
+    # process and resolves PHP's own VCRUNTIME140.dll dependency from
+    # *inside* depshieldx's own bundle instead of its real one, failing
+    # outright on a version mismatch that never happens from source. See
+    # core/runtime.py's own module docstring.
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=subprocess_env())
 
 
 def _command_error(result: subprocess.CompletedProcess, action: str) -> str:

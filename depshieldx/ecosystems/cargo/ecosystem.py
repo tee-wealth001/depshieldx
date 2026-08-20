@@ -42,6 +42,7 @@ from .registry import (
     fetch_version_metadata,
 )
 from ...core.resolver import ResolutionResult
+from ...core.runtime import subprocess_env
 
 # The scratch project's own manifest name, used only for the bare
 # "resolve a package name with no existing project" flow -- excluded from
@@ -160,6 +161,7 @@ class CargoEcosystem:
                 cwd=temp_dir,
                 capture_output=True,
                 text=True,
+                env=subprocess_env(),
             )
             if result.returncode != 0:
                 # Confirmed directly: cargo add's error output goes entirely

@@ -15,7 +15,7 @@ from ...ecosystems import (
     resolve_node_tool,
 )
 from ...core.routing import disable_routing as disable_routing_shim, enable_routing as enable_routing_shim, get_routing_status
-from ...core.runtime import pip_command, self_invoke_command
+from ...core.runtime import pip_command, self_invoke_command, subprocess_env
 from ..engine import _show_routing_enabled_message
 
 
@@ -72,7 +72,7 @@ def route_pip(pip_args):
         command = self_invoke_command(["install", package_target])
         if os.environ.get("DEPSHIELDX_ROUTE_DEEP") == "1":
             command.append("--deep")
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -80,7 +80,7 @@ def route_pip(pip_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run(pip_command(args), check=False)
+    result = subprocess.run(pip_command(args), check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -118,7 +118,7 @@ def _route_npm_family(manager, args):
     if _is_plain_npm_family_install(args) and lockfile_path.exists():
         click.echo(f"Routing {manager} install through depshieldx...")
         command = self_invoke_command(["install", "--lockfile", str(lockfile_path)])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     if manager == "npm":
@@ -126,7 +126,7 @@ def _route_npm_family(manager, args):
         if package_targets:
             click.echo(f"Routing {manager} install through depshieldx...")
             command = self_invoke_command(["install", *package_targets, "--ecosystem", "npm"])
-            result = subprocess.run(command, check=False)
+            result = subprocess.run(command, check=False, env=subprocess_env())
             raise SystemExit(result.returncode)
 
     click.secho(
@@ -135,7 +135,7 @@ def _route_npm_family(manager, args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_node_tool(manager), *args], check=False)
+    result = subprocess.run([resolve_node_tool(manager), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -179,7 +179,7 @@ def route_cargo(cargo_args):
     if crate_targets:
         click.echo("Routing cargo add through depshieldx...")
         command = self_invoke_command(["install", *crate_targets, "--ecosystem", "cargo"])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -188,7 +188,7 @@ def route_cargo(cargo_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_cargo_tool("cargo"), *args], check=False)
+    result = subprocess.run([resolve_cargo_tool("cargo"), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -218,7 +218,7 @@ def route_go(go_args):
     if module_targets:
         click.echo("Routing go get through depshieldx...")
         command = self_invoke_command(["install", *module_targets, "--ecosystem", "go"])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -227,7 +227,7 @@ def route_go(go_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_go_tool("go"), *args], check=False)
+    result = subprocess.run([resolve_go_tool("go"), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -268,7 +268,7 @@ def route_dotnet(dotnet_args):
     if package_target:
         click.echo("Routing dotnet add package through depshieldx...")
         command = self_invoke_command(["install", package_target, "--ecosystem", "nuget"])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -277,7 +277,7 @@ def route_dotnet(dotnet_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_dotnet_tool("dotnet"), *args], check=False)
+    result = subprocess.run([resolve_dotnet_tool("dotnet"), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -322,7 +322,7 @@ def route_dart(dart_args):
     if package_targets:
         click.echo("Routing dart pub add through depshieldx...")
         command = self_invoke_command(["install", *package_targets, "--ecosystem", "pub"])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -331,7 +331,7 @@ def route_dart(dart_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_dart_tool("dart"), *args], check=False)
+    result = subprocess.run([resolve_dart_tool("dart"), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -376,7 +376,7 @@ def route_bundle(bundle_args):
     if gem_targets:
         click.echo("Routing bundle add through depshieldx...")
         command = self_invoke_command(["install", *gem_targets, "--ecosystem", "rubygems"])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -385,7 +385,7 @@ def route_bundle(bundle_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_bundle_tool("bundle"), *args], check=False)
+    result = subprocess.run([resolve_bundle_tool("bundle"), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 
@@ -439,7 +439,7 @@ def route_composer(composer_args):
     if package_targets:
         click.echo("Routing composer require through depshieldx...")
         command = self_invoke_command(["install", *package_targets, "--ecosystem", "composer"])
-        result = subprocess.run(command, check=False)
+        result = subprocess.run(command, check=False, env=subprocess_env())
         raise SystemExit(result.returncode)
 
     click.secho(
@@ -448,7 +448,7 @@ def route_composer(composer_args):
         fg="yellow",
         err=True,
     )
-    result = subprocess.run([resolve_composer_tool("composer"), *args], check=False)
+    result = subprocess.run([resolve_composer_tool("composer"), *args], check=False, env=subprocess_env())
     raise SystemExit(result.returncode)
 
 

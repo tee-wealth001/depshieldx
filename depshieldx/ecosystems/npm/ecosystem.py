@@ -16,6 +16,7 @@ import requests
 from .lockfiles import parse_lockfile, parse_package_lock_json
 from .registry import check_provenance_batch as npm_check_provenance_batch, fetch_package_metadata
 from ...core.resolver import ResolutionResult
+from ...core.runtime import subprocess_env
 from ..base import _strip_version_spec
 
 
@@ -136,6 +137,7 @@ class NpmEcosystem:
                 cwd=temp_dir,
                 capture_output=True,
                 text=True,
+                env=subprocess_env(),
             )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "").strip()
