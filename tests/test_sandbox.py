@@ -16,6 +16,7 @@ from depshieldx.ecosystems.maven import MAVEN_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
 from depshieldx.ecosystems.nuget import NUGET_ECOSYSTEM
 from depshieldx.ecosystems.pub import PUB_ECOSYSTEM
+from depshieldx.ecosystems.rubygems import RUBYGEMS_ECOSYSTEM
 from depshieldx.sandbox import (
     CARGO_SANDBOX_IMAGE_TAG,
     GO_SANDBOX_IMAGE_TAG,
@@ -23,6 +24,7 @@ from depshieldx.sandbox import (
     NPM_SANDBOX_IMAGE_TAG,
     NUGET_SANDBOX_IMAGE_TAG,
     PUB_SANDBOX_IMAGE_TAG,
+    RUBYGEMS_SANDBOX_IMAGE_TAG,
     REPORT_PREFIX,
     DownloadBundle,
     SandboxResult,
@@ -35,6 +37,7 @@ from depshieldx.sandbox import (
     _ensure_npm_sandbox_image,
     _ensure_nuget_sandbox_image,
     _ensure_pub_sandbox_image,
+    _ensure_rubygems_sandbox_image,
     _extract_report,
     _run_command,
     _sandbox_cache_fingerprint,
@@ -46,6 +49,7 @@ from depshieldx.sandbox import (
     prepare_npm_download_bundle,
     prepare_nuget_download_bundle,
     prepare_pub_download_bundle,
+    prepare_rubygems_download_bundle,
     run_sandbox,
 )
 from depshieldx.security.sandbox.sandbox_wrapper import EvidenceCollector, _create_target_dir, _discover_import_targets, _is_allowed_write_path
@@ -1330,6 +1334,174 @@ class PubSandboxTests(unittest.TestCase):
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/pub-deep")
         self.assertIn(":/tmp/depshieldx-pub-unused:rw", " ".join(docker_command))
+
+
+class RubyGemsSandboxTests(unittest.TestCase):
+    def _selected_entries(self, package_name, version):
+        artifact = {
+            "url": f"https://rubygems.org/gems/{package_name}-{version}.gem",
+            "filename": f"{package_name}-{version}.gem",
+            "checksum_algorithm": "sha256",
+            "checksum": None,
+        }
+        return [(package_name, version, artifact)]
+
+    def _fake_gem_bytes(self) -> bytes:
+        # A real, minimal, openable .gem archive: a plain (uncompressed)
+        # tar containing gzip-compressed inner members (metadata.gz,
+        # data.tar.gz, checksums.yaml.gz) -- confirmed directly against a
+        # real downloaded .gem file. Only data.tar.gz needs real content
+        # here (the member analyze_artifact()'s .gem branch actually
+        # descends into).
+        inner_buffer = io.BytesIO()
+        with tarfile.open(fileobj=inner_buffer, mode="w:gz") as inner_archive:
+            data = b'puts "hi"\n'
+            info = tarfile.TarInfo(name="lib/demo_gem.rb")
+            info.size = len(data)
+            inner_archive.addfile(info, io.BytesIO(data))
+        data_tar_gz_bytes = inner_buffer.getvalue()
+
+        outer_buffer = io.BytesIO()
+        with tarfile.open(fileobj=outer_buffer, mode="w:") as outer_archive:
+            for member_name, content in (
+                ("metadata.gz", b""),
+                ("data.tar.gz", data_tar_gz_bytes),
+                ("checksums.yaml.gz", b""),
+            ):
+                info = tarfile.TarInfo(name=member_name)
+                info.size = len(content)
+                outer_archive.addfile(info, io.BytesIO(content))
+        return outer_buffer.getvalue()
+
+    @patch.object(RUBYGEMS_ECOSYSTEM, "fetch_artifact")
+    @patch.object(RUBYGEMS_ECOSYSTEM, "selected_artifact_entries")
+    def test_prepare_rubygems_download_bundle_builds_flat_gems_vendor_cache_and_lockfile(
+        self, mock_entries, mock_fetch_artifact
+    ):
+        package_name, version = "demo_gem", "1.0.0"
+        mock_entries.return_value = self._selected_entries(package_name, version)
+
+        def _fake_fetch_artifact(artifact, destination):
+            path = Path(destination) / artifact["filename"]
+            path.write_bytes(self._fake_gem_bytes())
+            return path
+
+        mock_fetch_artifact.side_effect = _fake_fetch_artifact
+
+        bundle = prepare_rubygems_download_bundle(RUBYGEMS_ECOSYSTEM, {package_name: version})
+        try:
+            self.assertIn("demo_gem-1.0.0.gem", bundle.downloaded_files)
+            self.assertIn("Gemfile", bundle.downloaded_files)
+            self.assertIn("Gemfile.lock", bundle.downloaded_files)
+
+            gemfile_text = (Path(bundle.temp_dir) / "Gemfile").read_text(encoding="utf-8")
+            self.assertIn('gem "demo_gem", "1.0.0"', gemfile_text)
+
+            lockfile_text = (Path(bundle.temp_dir) / "Gemfile.lock").read_text(encoding="utf-8")
+            self.assertIn("demo_gem (1.0.0)", lockfile_text)
+            self.assertIn("demo_gem (= 1.0.0)", lockfile_text)
+
+            cached_gem = Path(bundle.temp_dir) / "vendor" / "cache" / "demo_gem-1.0.0.gem"
+            self.assertTrue(cached_gem.exists())
+            self.assertEqual(cached_gem.read_bytes(), self._fake_gem_bytes())
+
+            # No `bundle`/subprocess invocation at all host-side -- see
+            # prepare_rubygems_download_bundle's own docstring for why
+            # (native-extension compilation is never safe to trigger on
+            # the host).
+            self.assertGreaterEqual(bundle.static_analysis["artifacts_scanned"].count("demo_gem-1.0.0.gem"), 1)
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_rubygems_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_rubygems_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_rubygems_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_rubygems_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(RUBYGEMS_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("rubygems_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_rubygems_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_rubygems_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_rubygems_image_and_rubygems_wrapper_for_rubygems_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/rubygems-deep",
+            downloaded_files=["demo_gem-1.0.0.gem", "Gemfile", "Gemfile.lock"],
+            artifact_hashes={"demo_gem-1.0.0.gem": "abc"},
+            requirements_path="/tmp/rubygems-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"download_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"demo_gem": "1.0.0"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=RUBYGEMS_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(RUBYGEMS_ECOSYSTEM, {"demo_gem": "1.0.0"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(RUBYGEMS_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_rubygems.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("demo_gem@1.0.0", docker_command)
+        self.assertIn(
+            "/tmp/depshieldx-rubygems-work:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for RubyGems --
+        # the flat .gem/Gemfile/Gemfile.lock/vendor-cache layout was
+        # already built host-side, so Trivy scans the bundle directory
+        # directly instead of the (unused, empty) bind-mounted install
+        # dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/rubygems-deep")
+        self.assertIn(":/tmp/depshieldx-rubygems-unused:rw", " ".join(docker_command))
 
 
 class EvidenceCollectorTests(unittest.TestCase):
