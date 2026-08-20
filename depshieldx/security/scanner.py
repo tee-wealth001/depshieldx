@@ -4,6 +4,7 @@ INFO_ONLY_WARNING_PREFIXES = (
     "github advisory lookup unavailable",
     "CISA KEV lookup unavailable",
     "deps.dev lookup unavailable",
+    "OSV lookup unavailable",
 )
 
 
@@ -58,8 +59,14 @@ def scan_vulnerabilities(packages, resolved_versions=None, ecosystem="pypi"):
 
     github_warnings, github_infos = _split_messages_by_severity(github_result.get("warnings", []))
     deps_warnings, deps_infos = _split_messages_by_severity(deps_dev_result.get("warnings", []))
-    warnings = list(github_warnings) + list(deps_warnings)
-    infos = list(github_infos) + list(deps_infos)
+    # OSV and CISA KEV are both blocking sources -- surfacing their own
+    # lookup failures here (rather than letting them stay silently
+    # indistinguishable from "no vulnerabilities found") uses the same
+    # info-level visibility already established for github/deps.dev.
+    osv_source_warnings, osv_source_infos = _split_messages_by_severity(all_sources.get("osv_warnings", []))
+    cisa_source_warnings, cisa_source_infos = _split_messages_by_severity(all_sources.get("cisa_kev_warnings", []))
+    warnings = list(github_warnings) + list(deps_warnings) + list(osv_source_warnings) + list(cisa_source_warnings)
+    infos = list(github_infos) + list(deps_infos) + list(osv_source_infos) + list(cisa_source_infos)
 
     multi_source_cve_results = {}
     osv_hits = []

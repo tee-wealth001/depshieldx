@@ -54,9 +54,19 @@ async def _async_fetch_cisa_kev_cves_inner(session: aiohttp.ClientSession, packa
     return vulns
 
 
-async def _async_fetch_cisa_kev_cves(package_name: str) -> Tuple[str, List[VersionVulnerability]]:
-    """Async: Fetch from CISA KEV with retry logic."""
+async def _async_fetch_cisa_kev_cves(package_name: str) -> Tuple[str, List[VersionVulnerability], List[str]]:
+    """Async: Fetch from CISA KEV with retry logic.
+
+    CISA KEV is a blocking source (see scanner.py) -- a silently swallowed
+    exception here previously made a real lookup failure indistinguishable
+    from "checked CISA KEV, found nothing." The third return element
+    surfaces that failure as a warning instead, using the same "CISA KEV
+    lookup unavailable" message prefix fetch_cisa_kev already uses (and
+    scanner.py's INFO_ONLY_WARNING_PREFIXES already recognizes), so it's
+    now actually produced on this live async path too.
+    """
     vulns = []
+    warnings: List[str] = []
     try:
         async with aiohttp.ClientSession() as session:
             vulns = await _async_retry(
@@ -66,8 +76,8 @@ async def _async_fetch_cisa_kev_cves(package_name: str) -> Tuple[str, List[Versi
                 max_retries=MAX_RETRIES,
             )
     except Exception as e:
-        pass
-    return "cisa-kev", vulns
+        warnings.append(f"CISA KEV lookup unavailable for {package_name}: {e}")
+    return "cisa-kev", vulns, warnings
 
 
 def fetch_cisa_kev(cve_ids: Iterable[str]) -> dict:

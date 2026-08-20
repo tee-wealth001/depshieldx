@@ -43,9 +43,9 @@ async def _fetch_all_sources_for_packages_concurrent(
     except asyncio.TimeoutError:
         # Return empty/timeout results for all tasks
         all_results = [
-            ("osv", []) for _ in per_package_tasks[::2]  # One per package
+            ("osv", [], ["OSV lookup unavailable: gather timeout"]) for _ in per_package_tasks[::2]  # One per package
         ] + [
-            ("cisa-kev", []) for _ in per_package_tasks[1::2]  # One per package
+            ("cisa-kev", [], ["CISA KEV lookup unavailable: gather timeout"]) for _ in per_package_tasks[1::2]  # One per package
         ] + [
             ("github-advisories", {"hits": [], "warnings": ["timeout"]}),
             ("deps-dev", {"hits": [], "warnings": ["timeout"]}),
@@ -54,6 +54,14 @@ async def _fetch_all_sources_for_packages_concurrent(
     # Organize results by package/source
     per_package_results = {}  # {package_name: {source: vulns}}
     batch_results = {}  # {source_name: result}
+    # OSV and CISA KEV are both blocking sources (see scanner.py) -- a
+    # lookup failure here used to be silently indistinguishable from
+    # "checked, found nothing" (return_exceptions=True turns a raised
+    # exception into a value that was simply dropped below). These two
+    # lists surface that failure instead, the same "lookup unavailable"
+    # warning convention github-advisories/deps-dev already use.
+    osv_warnings: List[str] = []
+    cisa_kev_warnings: List[str] = []
 
     # Process per-package results
     for i, pkg in enumerate(packages):
@@ -65,11 +73,17 @@ async def _fetch_all_sources_for_packages_concurrent(
         cisa_result = all_results[result_idx + 1]
 
         if not isinstance(osv_result, Exception):
-            source_name, vulns = osv_result
+            source_name, vulns, warnings = osv_result
             per_package_results[pkg][source_name] = vulns
+            osv_warnings.extend(warnings)
+        else:
+            osv_warnings.append(f"OSV lookup unavailable for {pkg}: {osv_result}")
         if not isinstance(cisa_result, Exception):
-            source_name, vulns = cisa_result
+            source_name, vulns, warnings = cisa_result
             per_package_results[pkg][source_name] = vulns
+            cisa_kev_warnings.extend(warnings)
+        else:
+            cisa_kev_warnings.append(f"CISA KEV lookup unavailable for {pkg}: {cisa_result}")
 
         result_idx += 2
 
@@ -82,6 +96,8 @@ async def _fetch_all_sources_for_packages_concurrent(
     return {
         "per_package": per_package_results,
         "batch": batch_results,
+        "osv_warnings": osv_warnings,
+        "cisa_kev_warnings": cisa_kev_warnings,
     }
 
 
@@ -94,10 +110,13 @@ async def _fetch_all_with_timeout(packages, resolved_versions, ecosystem="pypi")
         )
     except asyncio.TimeoutError:
         return {
-            "osv_results": {},
-            "cisa_kev_results": {},
-            "github_advisories": {"hits": [], "warnings": ["cve sources lookup timeout"]},
-            "deps_dev": {"hits": [], "warnings": ["cve sources lookup timeout"]},
+            "per_package": {},
+            "batch": {
+                "github-advisories": {"hits": [], "warnings": ["cve sources lookup timeout"]},
+                "deps-dev": {"hits": [], "warnings": ["cve sources lookup timeout"]},
+            },
+            "osv_warnings": ["OSV lookup unavailable: cve sources lookup timeout"],
+            "cisa_kev_warnings": ["CISA KEV lookup unavailable: cve sources lookup timeout"],
         }
 
 
@@ -124,6 +143,12 @@ def fetch_all_sources_for_packages(
         - 'cisa_kev_results': {package: [current_vulns, historical_vulns]}
         - 'github_advisories': {hits, warnings} for all packages
         - 'deps_dev': {hits, warnings} for all packages
+        - 'osv_warnings': list of "OSV lookup unavailable: ..." messages, one per
+          package (or source) that failed rather than returning zero results --
+          both OSV and CISA KEV are blocking sources, so a lookup failure here
+          is surfaced explicitly instead of being indistinguishable from "no
+          vulnerabilities found"
+        - 'cisa_kev_warnings': same, for CISA KEV
     """
     try:
         # Run all concurrent fetches with timeout
@@ -134,6 +159,8 @@ def fetch_all_sources_for_packages(
             "cisa_kev_results": {},
             "github_advisories": {"hits": [], "warnings": [f"cve sources lookup error: {type(e).__name__}"]},
             "deps_dev": {"hits": [], "warnings": [f"cve sources lookup error: {type(e).__name__}"]},
+            "osv_warnings": [f"OSV lookup unavailable: cve sources lookup error: {type(e).__name__}"],
+            "cisa_kev_warnings": [f"CISA KEV lookup unavailable: cve sources lookup error: {type(e).__name__}"],
         }
 
     # Organize per-package results
@@ -182,4 +209,6 @@ def fetch_all_sources_for_packages(
         "cisa_kev_results": cisa_kev_results,
         "github_advisories": github_advisories,
         "deps_dev": deps_dev,
+        "osv_warnings": all_sources.get("osv_warnings", []),
+        "cisa_kev_warnings": all_sources.get("cisa_kev_warnings", []),
     }
