@@ -4,6 +4,7 @@ import subprocess
 import tarfile
 import tempfile
 import uuid
+import zipfile
 from dataclasses import dataclass
 import json
 import hashlib
@@ -16,6 +17,8 @@ from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel
 from ..artifact_analysis import analyze_artifacts
 from ...storage.cache import fingerprint_artifacts, load_cache_entry, store_cache_entry
 from ...ecosystems import PYPI_ECOSYSTEM
+from ...ecosystems.composer.ecosystem import _build_scratch_composer_json_for_artifacts
+from ...ecosystems.composer.lockfiles import write_composer_lock
 from ...ecosystems.go.registry import (
     escape_module_path,
     fetch_go_mod_text,
@@ -89,6 +92,18 @@ PUB_SANDBOX_IMAGE_TAG = "depshieldx-pub-sandbox:dart3"
 # missing. See rubygems_sandbox.Dockerfile's own module docstring for the
 # full reasoning, including why `bundle install` never runs host-side.
 RUBYGEMS_SANDBOX_IMAGE_TAG = "depshieldx-rubygems-sandbox:ruby3"
+# Built locally from security/sandbox/docker/composer_sandbox.Dockerfile
+# (php:8.4-cli + strace + the zip PHP extension + unzip, confirmed
+# directly php:8.4-cli already ships gcc/make/curl/mbstring/openssl/Phar
+# but not the zip extension Composer's own offline "artifact" repository
+# mechanism needs). Unlike RubyGems, no native-extension compilation
+# happens during a Composer install at all (confirmed directly -- see
+# ecosystems/composer/ecosystem.py's module docstring), so unlike
+# RUBYGEMS_SANDBOX_IMAGE_TAG's own real reason for existing, no ruby:3-
+# style "needs a full toolchain instead of -slim" concern applies here;
+# php:8.4-cli was simply the closest official base with what's actually
+# needed already present.
+COMPOSER_SANDBOX_IMAGE_TAG = "depshieldx-composer-sandbox:php8.4"
 SANDBOX_USER = "65534:65534"
 
 
@@ -432,6 +447,31 @@ def _ensure_rubygems_sandbox_image(verbose: bool = False) -> None:
         str(dockerfile),
         "-t",
         RUBYGEMS_SANDBOX_IMAGE_TAG,
+        str(dockerfile.parent),
+    ]
+    _run_command(build_command, verbose=verbose)
+
+
+def _ensure_composer_sandbox_image(verbose: bool = False) -> None:
+    """Build depshieldx's php:8.4-cli + strace + zip image if it isn't
+    already present locally. Mirrors _ensure_rubygems_sandbox_image -- no
+    pre-warming needed (see composer_sandbox.Dockerfile's docstring)."""
+    inspect = subprocess.run(
+        ["docker", "image", "inspect", COMPOSER_SANDBOX_IMAGE_TAG],
+        capture_output=True,
+        **TEXT_SUBPROCESS_KWARGS,
+    )
+    if inspect.returncode == 0:
+        return
+
+    dockerfile = resource_path("security/sandbox/docker/composer_sandbox.Dockerfile")
+    build_command = [
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile),
+        "-t",
+        COMPOSER_SANDBOX_IMAGE_TAG,
         str(dockerfile.parent),
     ]
     _run_command(build_command, verbose=verbose)
@@ -1186,6 +1226,136 @@ def prepare_rubygems_download_bundle(ecosystem, resolved_versions: dict[str, str
         raise
 
 
+def _rezip_composer_artifact_with_version(source_zip: Path, destination_zip: Path, version: str) -> None:
+    """Unzip -> inject a "version" key into the package's own composer.
+    json -> rezip, confirmed directly this is required for Composer's
+    real "artifact" repository mechanism (ecosystems/composer/
+    ecosystem.py's own module docstring): a real Packagist dist archive's
+    composer.json normally has no "version" field at all (it's derived
+    from VCS tags in the hosted case), but ArtifactRepository reads only
+    that field, never inferring one from the filename.
+
+    Real GitHub zipball dist archives (confirmed directly the common
+    case, since dist.shasum is empty and dist.url points at a VCS host
+    for essentially every real package -- see registry.py's module
+    docstring) wrap every file in one top-level directory, e.g.
+    "Seldaek-monolog-b321dd6/". Composer's own artifact repository
+    transparently unwraps this at install time (confirmed directly), so
+    this function flattens it the same way during rezip -- confirmed
+    directly end-to-end this round-trips correctly through a real
+    offline sandboxed install. Falls back to treating the extracted root
+    itself as the package root when there isn't exactly one top-level
+    directory, rather than assuming every real dist archive is
+    GitHub-shaped.
+    """
+    with tempfile.TemporaryDirectory(prefix="depshieldx_composer_artifact_") as extract_dir_str:
+        extract_dir = Path(extract_dir_str)
+        with zipfile.ZipFile(source_zip) as archive:
+            archive.extractall(extract_dir)
+
+        top_level_entries = list(extract_dir.iterdir())
+        if len(top_level_entries) == 1 and top_level_entries[0].is_dir():
+            package_root = top_level_entries[0]
+        else:
+            package_root = extract_dir
+
+        composer_json_path = package_root / "composer.json"
+        manifest = json.loads(composer_json_path.read_text(encoding="utf-8"))
+        manifest["version"] = version
+        composer_json_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        with zipfile.ZipFile(destination_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+            for file_path in package_root.rglob("*"):
+                if file_path.is_file():
+                    archive.write(file_path, file_path.relative_to(package_root))
+
+
+def prepare_composer_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> DownloadBundle:
+    """Composer's counterpart to prepare_rubygems_download_bundle --
+    downloads (and, via fetch_artifact, checksum-verifies when the
+    registry actually publishes one -- see registry.py's module
+    docstring for why that's the exception rather than the rule here)
+    every resolved package's real dist archive flat into temp_dir's
+    root, then *also* rewrites each one (via
+    _rezip_composer_artifact_with_version) into an artifacts/ directory
+    so the sandboxed `composer install` (sandbox_wrapper_composer.py) can
+    resolve entirely offline through Composer's own real "artifact"
+    repository mechanism.
+
+    Also writes a scratch composer.json (every resolved package as a
+    direct dependency pointed at the artifacts/ directory, reusing
+    ecosystems/composer/ecosystem.py's own
+    _build_scratch_composer_json_for_artifacts -- same "pin everything,
+    not just the requested targets" reasoning as
+    prepare_cargo_download_bundle/prepare_go_download_bundle/
+    prepare_maven_download_bundle/prepare_nuget_download_bundle/
+    prepare_pub_download_bundle/prepare_rubygems_download_bundle)
+    alongside a matching composer.lock this function writes *directly*
+    from the already-known resolved_versions via write_composer_lock,
+    rather than invoking `composer` to produce one.
+
+    Deliberately never invokes `composer` itself here, on the host --
+    unlike prepare_nuget_download_bundle/prepare_pub_download_bundle
+    (which each need a real host-side toolchain call to produce a lock
+    file in their own registry-native shape), a hand-written composer.
+    lock is already confirmed directly sufficient for Trivy's own
+    composer.lock vulnerability detection (see write_composer_lock's own
+    docstring) -- there is nothing a host-side `composer install` would
+    prove here that the already-real resolution (a genuine `composer
+    require --no-install` scratch resolve, or a parsed real composer.
+    lock) and the already checksum-verified artifact fetch above don't
+    already establish, mirroring prepare_rubygems_download_bundle's own
+    "don't shell out again for no reason" reasoning (for an entirely
+    different underlying reason -- Composer has no comparable
+    installation-time code-execution risk to isolate, see
+    sandbox_wrapper_composer.py's own module docstring). A separate,
+    ALSO real `composer install` run happens only inside the fully-
+    isolated sandbox container itself (sandbox_wrapper_composer.py), to
+    prove genuine offline installability against the fetched artifacts.
+    """
+    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    try:
+        resolution = ResolutionResult(
+            packages=list(resolved_versions.keys()),
+            install_target="",
+            resolved_versions=resolved_versions,
+        )
+        artifacts_dir = Path(temp_dir) / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        for package_name, version, artifact in ecosystem.selected_artifact_entries(resolution):
+            artifact_path = ecosystem.fetch_artifact(artifact, Path(temp_dir))
+            _rezip_composer_artifact_with_version(artifact_path, artifacts_dir / artifact_path.name, version)
+
+        composer_json_path = Path(temp_dir) / "composer.json"
+        composer_json_path.write_text(
+            _build_scratch_composer_json_for_artifacts(resolved_versions), encoding="utf-8"
+        )
+
+        composer_lock_path = Path(temp_dir) / "composer.lock"
+        composer_lock_path.write_text(write_composer_lock(resolved_versions), encoding="utf-8")
+
+        downloaded_files = sorted(path.name for path in Path(temp_dir).iterdir() if path.is_file())
+        static_analysis = analyze_artifacts(temp_dir)
+        artifact_hashes = {path.name: _sha256_file(path) for path in Path(temp_dir).iterdir() if path.is_file()}
+
+        requirements_path = str(Path(temp_dir) / "depshieldx-lock.txt")
+        Path(requirements_path).write_text(
+            "\n".join(f"{name}@{version}" for name, version in sorted(resolved_versions.items())) + "\n"
+        )
+
+        return DownloadBundle(
+            temp_dir=temp_dir,
+            downloaded_files=downloaded_files,
+            artifact_hashes=artifact_hashes,
+            requirements_path=requirements_path,
+            static_analysis=static_analysis,
+            fingerprint=fingerprint_artifacts(artifact_hashes),
+        )
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
 def _scan_host_install_dir(host_install_dir: str) -> Optional[dict]:
     """
     Run Trivy directly against the host directory the sandbox container's
@@ -1257,6 +1427,7 @@ def run_sandbox(
     is_nuget = ecosystem.name == "nuget"
     is_pub = ecosystem.name == "pub"
     is_rubygems = ecosystem.name == "rubygems"
+    is_composer = ecosystem.name == "composer"
     docker_image = (
         NPM_SANDBOX_IMAGE_TAG
         if is_npm
@@ -1270,7 +1441,9 @@ def run_sandbox(
         if is_nuget
         else PUB_SANDBOX_IMAGE_TAG
         if is_pub
-        else RUBYGEMS_SANDBOX_IMAGE_TAG if is_rubygems else DOCKER_IMAGE
+        else RUBYGEMS_SANDBOX_IMAGE_TAG
+        if is_rubygems
+        else COMPOSER_SANDBOX_IMAGE_TAG if is_composer else DOCKER_IMAGE
     )
     if isinstance(install_targets, str):
         install_targets = [install_targets]
@@ -1335,6 +1508,8 @@ def run_sandbox(
             bundle = prepare_pub_download_bundle(ecosystem, resolved_versions or {})
         elif is_rubygems:
             bundle = prepare_rubygems_download_bundle(ecosystem, resolved_versions or {})
+        elif is_composer:
+            bundle = prepare_composer_download_bundle(ecosystem, resolved_versions or {})
         else:
             bundle = prepare_download_bundle(
                 install_targets,
@@ -1718,6 +1893,51 @@ def run_sandbox(
                 ]
                 env_args = ["-e", "HOME=/tmp"]
                 _ensure_rubygems_sandbox_image(verbose=verbose)
+            elif is_composer:
+                container_entrypoint = [
+                    "python3",
+                    "/depshieldx/sandbox_wrapper_composer.py",
+                    "/tmp/packages",
+                    *[f"{name}@{version}" for name, version in sorted((resolved_versions or {}).items())],
+                ]
+                wrapper_mount = f"{resource_path('security/sandbox/sandbox_wrapper_composer.py').parent}:/depshieldx:ro"
+                # prepare_composer_download_bundle already built the flat
+                # */artifacts/*.zip/composer.json/composer.lock layout
+                # host-side, before the container ever runs -- no plugin-
+                # cache merge needed, same as NuGet/Maven/Pub/RubyGems.
+                # So, like those, there's no new output that needs to
+                # survive tmpfs teardown via a bind-mounted install dir:
+                # host_install_dir/container_install_path stay unused for
+                # Composer, and Trivy scans the host-side bundle
+                # directory directly (already bind-mounted read-only at
+                # /tmp/packages, since bundle.temp_dir itself is mounted
+                # there) -- Trivy's own Composer support reads a real
+                # composer.lock natively (confirmed directly against a
+                # real known CVE), which prepare_composer_download_bundle
+                # already wrote host-side directly from the already-known
+                # resolution, without ever invoking composer (see that
+                # function's own docstring for why).
+                container_install_path = "/tmp/depshieldx-composer-unused"
+                host_scan_subpath = None
+                scan_base_dir = bundle.temp_dir
+                # sandbox_wrapper_composer.py copies the mounted,
+                # pre-built composer.json/artifacts/ into its own
+                # writable work directory before running `composer
+                # install` there -- Composer needs to write real
+                # bookkeeping (vendor/, composer.lock, an autoload cache,
+                # its own cache/config dir under $HOME) a read-only bind
+                # mount can't accommodate, the same "copy into a writable
+                # location before use" pattern sandbox_wrapper_maven.py/
+                # sandbox_wrapper_pub.py/sandbox_wrapper_rubygems.py
+                # already use for their own state. 256m matches the
+                # other ecosystems' own build-stage tmpfs sizing rather
+                # than being tuned to the single case observed.
+                extra_tmpfs_args = [
+                    "--tmpfs",
+                    "/tmp/depshieldx-composer-work:rw,nosuid,nodev,exec,size=256m",
+                ]
+                env_args = ["-e", "HOME=/tmp"]
+                _ensure_composer_sandbox_image(verbose=verbose)
             else:
                 container_entrypoint = [
                     "python",

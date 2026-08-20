@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import subprocess
 import tarfile
@@ -11,6 +12,7 @@ import zipfile
 
 from depshieldx.cache import CacheEntry
 from depshieldx.ecosystems.cargo import CARGO_ECOSYSTEM
+from depshieldx.ecosystems.composer import COMPOSER_ECOSYSTEM
 from depshieldx.ecosystems.go import GO_ECOSYSTEM
 from depshieldx.ecosystems.maven import MAVEN_ECOSYSTEM
 from depshieldx.ecosystems.npm import NPM_ECOSYSTEM
@@ -19,6 +21,7 @@ from depshieldx.ecosystems.pub import PUB_ECOSYSTEM
 from depshieldx.ecosystems.rubygems import RUBYGEMS_ECOSYSTEM
 from depshieldx.sandbox import (
     CARGO_SANDBOX_IMAGE_TAG,
+    COMPOSER_SANDBOX_IMAGE_TAG,
     GO_SANDBOX_IMAGE_TAG,
     MAVEN_SANDBOX_IMAGE_TAG,
     NPM_SANDBOX_IMAGE_TAG,
@@ -32,6 +35,7 @@ from depshieldx.sandbox import (
     _build_locked_requirements,
     _docker_daemon_available,
     _ensure_cargo_sandbox_image,
+    _ensure_composer_sandbox_image,
     _ensure_go_sandbox_image,
     _ensure_maven_sandbox_image,
     _ensure_npm_sandbox_image,
@@ -39,10 +43,12 @@ from depshieldx.sandbox import (
     _ensure_pub_sandbox_image,
     _ensure_rubygems_sandbox_image,
     _extract_report,
+    _rezip_composer_artifact_with_version,
     _run_command,
     _sandbox_cache_fingerprint,
     cleanup_download_bundle,
     prepare_cargo_download_bundle,
+    prepare_composer_download_bundle,
     prepare_download_bundle,
     prepare_go_download_bundle,
     prepare_maven_download_bundle,
@@ -1502,6 +1508,209 @@ class RubyGemsSandboxTests(unittest.TestCase):
         scanned_dir = mock_scan_container.call_args.args[0]
         self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/rubygems-deep")
         self.assertIn(":/tmp/depshieldx-rubygems-unused:rw", " ".join(docker_command))
+
+
+class ComposerSandboxTests(unittest.TestCase):
+    def _selected_entries(self, package_name, version):
+        artifact = {
+            "url": f"https://api.github.com/repos/{package_name}/zipball/abc123",
+            "filename": f"{package_name.replace('/', '-')}-{version}.zip",
+            "checksum_algorithm": None,
+            "checksum": None,
+            "reference": "abc123",
+        }
+        return [(package_name, version, artifact)]
+
+    def _fake_dist_zip_bytes(self, wrapped: bool = True) -> bytes:
+        # Real GitHub zipball dist archives wrap everything in one
+        # top-level directory (confirmed directly, e.g.
+        # "Seldaek-monolog-b321dd6/") -- composer.json here deliberately
+        # has no "version" field, mirroring a real Packagist package's
+        # own composer.json (derived from VCS tags normally, not present
+        # in the archive itself).
+        prefix = "vendor-demo-package-abc123/" if wrapped else ""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(f"{prefix}composer.json", '{"name": "demo/package"}')
+            archive.writestr(f"{prefix}src/Demo.php", "<?php class Demo {}\n")
+        return buffer.getvalue()
+
+    def test_rezip_composer_artifact_injects_version_and_unwraps_github_style_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_zip = Path(temp_dir) / "demo-package-1.0.0.zip"
+            source_zip.write_bytes(self._fake_dist_zip_bytes(wrapped=True))
+            destination_zip = Path(temp_dir) / "rezipped.zip"
+
+            _rezip_composer_artifact_with_version(source_zip, destination_zip, "1.0.0")
+
+            with zipfile.ZipFile(destination_zip) as archive:
+                names = archive.namelist()
+                # Flattened -- the wrapper directory itself is gone, not
+                # just its own composer.json (confirmed directly this
+                # matches how Composer's own artifact repository
+                # transparently unwraps it at install time).
+                self.assertIn("composer.json", names)
+                self.assertIn("src/Demo.php", names)
+                self.assertNotIn("vendor-demo-package-abc123/composer.json", names)
+
+                manifest = json.loads(archive.read("composer.json"))
+                self.assertEqual(manifest["version"], "1.0.0")
+                self.assertEqual(manifest["name"], "demo/package")
+
+    def test_rezip_composer_artifact_without_wrapper_directory_still_works(self):
+        # Not every real dist archive is necessarily GitHub-shaped --
+        # falls back to treating the extracted root itself as the
+        # package root rather than assuming a wrapper always exists.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_zip = Path(temp_dir) / "demo-package-1.0.0.zip"
+            source_zip.write_bytes(self._fake_dist_zip_bytes(wrapped=False))
+            destination_zip = Path(temp_dir) / "rezipped.zip"
+
+            _rezip_composer_artifact_with_version(source_zip, destination_zip, "1.0.0")
+
+            with zipfile.ZipFile(destination_zip) as archive:
+                manifest = json.loads(archive.read("composer.json"))
+                self.assertEqual(manifest["version"], "1.0.0")
+
+    @patch.object(COMPOSER_ECOSYSTEM, "fetch_artifact")
+    @patch.object(COMPOSER_ECOSYSTEM, "selected_artifact_entries")
+    def test_prepare_composer_download_bundle_builds_flat_zips_artifacts_dir_and_lockfile(
+        self, mock_entries, mock_fetch_artifact
+    ):
+        package_name, version = "demo/package", "1.0.0"
+        mock_entries.return_value = self._selected_entries(package_name, version)
+
+        def _fake_fetch_artifact(artifact, destination):
+            path = Path(destination) / artifact["filename"]
+            path.write_bytes(self._fake_dist_zip_bytes(wrapped=True))
+            return path
+
+        mock_fetch_artifact.side_effect = _fake_fetch_artifact
+
+        bundle = prepare_composer_download_bundle(COMPOSER_ECOSYSTEM, {package_name: version})
+        try:
+            self.assertIn("demo-package-1.0.0.zip", bundle.downloaded_files)
+            self.assertIn("composer.json", bundle.downloaded_files)
+            self.assertIn("composer.lock", bundle.downloaded_files)
+            # The rezipped artifacts/ copy is sandbox-install plumbing,
+            # not a separately reported/hashed download -- mirrors
+            # RubyGems' own vendor/cache/ and Pub's own pub-cache/ both
+            # being excluded from downloaded_files the same way.
+            self.assertNotIn("artifacts", bundle.downloaded_files)
+
+            composer_json_text = (Path(bundle.temp_dir) / "composer.json").read_text(encoding="utf-8")
+            manifest = json.loads(composer_json_text)
+            self.assertEqual(manifest["require"], {package_name: version})
+            self.assertEqual(manifest["repositories"]["packagist.org"], False)
+            self.assertEqual(manifest["repositories"]["depshieldx-artifacts"]["type"], "artifact")
+
+            lockfile_text = (Path(bundle.temp_dir) / "composer.lock").read_text(encoding="utf-8")
+            lockfile_json = json.loads(lockfile_text)
+            self.assertEqual(lockfile_json["packages"], [{"name": package_name, "version": version}])
+
+            rezipped_artifact = Path(bundle.temp_dir) / "artifacts" / "demo-package-1.0.0.zip"
+            self.assertTrue(rezipped_artifact.exists())
+            with zipfile.ZipFile(rezipped_artifact) as archive:
+                rezipped_manifest = json.loads(archive.read("composer.json"))
+                self.assertEqual(rezipped_manifest["version"], version)
+
+            # No `composer`/subprocess invocation at all host-side -- see
+            # prepare_composer_download_bundle's own docstring for why (a
+            # hand-written lockfile is already confirmed sufficient for
+            # Trivy).
+            self.assertGreaterEqual(bundle.static_analysis["artifacts_scanned"].count("demo-package-1.0.0.zip"), 1)
+        finally:
+            cleanup_download_bundle(bundle)
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_composer_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=0)
+
+        _ensure_composer_sandbox_image()
+
+        mock_run_command.assert_not_called()
+
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox.subprocess.run")
+    def test_ensure_composer_sandbox_image_builds_when_image_missing(self, mock_run, mock_run_command):
+        mock_run.return_value = subprocess.CompletedProcess(args=["docker", "image", "inspect"], returncode=1)
+
+        _ensure_composer_sandbox_image()
+
+        mock_run_command.assert_called_once()
+        build_command = mock_run_command.call_args.args[0]
+        self.assertEqual(build_command[:2], ["docker", "build"])
+        self.assertIn(COMPOSER_SANDBOX_IMAGE_TAG, build_command)
+        self.assertIn("composer_sandbox.Dockerfile", " ".join(build_command))
+
+    @patch("depshieldx.sandbox.subprocess.run")
+    @patch("depshieldx.sandbox._scan_host_install_dir")
+    @patch("depshieldx.sandbox._run_command")
+    @patch("depshieldx.sandbox._ensure_composer_sandbox_image")
+    @patch("depshieldx.sandbox.prepare_composer_download_bundle")
+    @patch("depshieldx.sandbox._docker_daemon_available", return_value=(True, None))
+    def test_run_sandbox_uses_composer_image_and_composer_wrapper_for_composer_ecosystem(
+        self,
+        _mock_docker,
+        mock_prepare_bundle,
+        mock_ensure_image,
+        mock_run_command,
+        mock_scan_container,
+        mock_subprocess_run,
+    ):
+        bundle = DownloadBundle(
+            temp_dir="/tmp/composer-deep",
+            downloaded_files=["demo-package-1.0.0.zip", "composer.json", "composer.lock"],
+            artifact_hashes={"demo-package-1.0.0.zip": "abc"},
+            requirements_path="/tmp/composer-deep/depshieldx-lock.txt",
+            static_analysis={"blocked": False},
+            fingerprint="fingerprint123",
+        )
+        mock_prepare_bundle.return_value = bundle
+        mock_run_command.return_value = subprocess.CompletedProcess(
+            args=["docker", "run"],
+            returncode=0,
+            stdout=REPORT_PREFIX + '{"download_exit_code": 0, "suspicious": false}',
+            stderr="",
+        )
+        mock_scan_container.return_value = {"scanned": True, "should_block": False}
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=["docker", "rm"], returncode=0, stdout="", stderr=""
+        )
+
+        result = run_sandbox(
+            [],
+            resolved_versions={"demo/package": "1.0.0"},
+            cache_enabled=False,
+            require_docker=True,
+            block_on_static_analysis=False,
+            block_on_trivy=True,
+            ecosystem=COMPOSER_ECOSYSTEM,
+        )
+
+        self.assertTrue(result.success)
+        mock_prepare_bundle.assert_called_once_with(COMPOSER_ECOSYSTEM, {"demo/package": "1.0.0"})
+        mock_ensure_image.assert_called_once()
+        docker_command = mock_run_command.call_args.args[0]
+        self.assertIn(COMPOSER_SANDBOX_IMAGE_TAG, docker_command)
+        self.assertIn("sandbox_wrapper_composer.py", " ".join(docker_command))
+        self.assertIn("python3", docker_command)
+        self.assertIn("demo/package@1.0.0", docker_command)
+        self.assertIn(
+            "/tmp/depshieldx-composer-work:rw,nosuid,nodev,exec,size=256m",
+            docker_command,
+        )
+
+        # No new output needs to survive tmpfs teardown for Composer --
+        # the flat .zip/composer.json/composer.lock/artifacts layout was
+        # already built host-side, so Trivy scans the bundle directory
+        # directly instead of the (unused, empty) bind-mounted install
+        # dir.
+        mock_scan_container.assert_called_once()
+        scanned_dir = mock_scan_container.call_args.args[0]
+        self.assertEqual(scanned_dir.replace("\\", "/"), "/tmp/composer-deep")
+        self.assertIn(":/tmp/depshieldx-composer-unused:rw", " ".join(docker_command))
 
 
 class RunSandboxFailureOutputTests(unittest.TestCase):

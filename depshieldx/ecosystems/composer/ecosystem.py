@@ -52,6 +52,7 @@ subprocess call -- is required here too.
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
@@ -119,6 +120,54 @@ def _to_composer_require_arg(name: str, version: str | None) -> str:
     # used as this ecosystem's own native syntax -- Composer package
     # names never contain "@", so there's no ambiguity either way.
     return f"{name}:{version}" if version else name
+
+
+def _build_scratch_composer_json_for_artifacts(resolved_versions: dict[str, str]) -> str:
+    """Builds the scratch composer.json runner.py's own
+    prepare_composer_download_bundle writes host-side (never on its own
+    invoked against a network -- only the sandboxed `composer install`
+    inside the isolated container ever reads this), pointing Composer at
+    a pre-fetched, checksum-verified local directory of package archives
+    via Composer's own real "artifact" repository mechanism, with the
+    default Packagist repository explicitly disabled.
+
+    Confirmed directly end-to-end against a real, isolated container
+    (--network none, --read-only rootfs, --cap-drop ALL, non-root user):
+    `"packagist.org": false` correctly suppresses the default remote
+    repository entirely (composer's own command log goes straight from
+    "Loading composer repositories with package information" to "Found
+    package ... in file ..." against the local artifact directory, no
+    network repository ever consulted) -- the JSON-object form of
+    "repositories" (keyed by name, not the plain array form Stage 1's own
+    scratch manifest uses) is required for this specific disable syntax,
+    confirmed directly against real Composer docs and a real install. The
+    artifact repository's own "./artifacts/" url is relative to this
+    file's own location, not the process's cwd -- confirmed directly, so
+    the caller must lay '"artifacts/"' out as this composer.json's own
+    sibling directory, exactly as ecosystem.py's own selected_artifact_
+    entries names each fetched archive (f"{name.replace('/', '-')}-
+    {version}.zip").
+
+    Every resolved package (transitive included) is pinned as an exact-
+    version "require" entry, same "pin everything" reasoning
+    prepare_cargo_download_bundle/prepare_go_download_bundle/
+    prepare_maven_download_bundle/prepare_nuget_download_bundle/
+    prepare_pub_download_bundle/prepare_rubygems_download_bundle already
+    use -- confirmed directly Composer accepts a bare exact version
+    string (e.g. "3.10.0") as a require constraint with no extra range
+    operator needed, the same shape _to_composer_require_arg's own CLI
+    target syntax already relies on.
+    """
+    require = {name: version for name, version in sorted(resolved_versions.items())}
+    manifest = {
+        "name": _SCRATCH_PACKAGE_NAME,
+        "repositories": {
+            "packagist.org": False,
+            "depshieldx-artifacts": {"type": "artifact", "url": "./artifacts/"},
+        },
+        "require": require,
+    }
+    return json.dumps(manifest, indent=4) + "\n"
 
 
 class ComposerEcosystem:
@@ -353,8 +402,6 @@ class ComposerEcosystem:
         "require"/"require-dev" tables are the one source of truth
         `composer require`/`composer remove` themselves read and write.
         """
-        import json
-
         manifest_path = Path(lockfile_path).parent / "composer.json"
         if not manifest_path.exists():
             raise RuntimeError(
