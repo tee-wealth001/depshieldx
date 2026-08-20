@@ -305,8 +305,9 @@ class SandboxHelpersTests(unittest.TestCase):
         self.assertIn("flask==3.1.3 --hash=sha256:", requirements_text)
         self.assertIn("Flask-3.1.3-py3-none-any.whl", artifact_hashes)
 
+    @patch("depshieldx.sandbox.subprocess_env", return_value={"FAKE_ENV": "1"})
     @patch("depshieldx.sandbox.subprocess.run")
-    def test_run_command_captures_output_by_default(self, mock_run):
+    def test_run_command_captures_output_by_default(self, mock_run, _mock_subprocess_env):
         mock_run.return_value = subprocess.CompletedProcess(
             args=["pip", "download"],
             returncode=0,
@@ -321,11 +322,13 @@ class SandboxHelpersTests(unittest.TestCase):
             ["pip", "download"],
             check=True,
             capture_output=True,
+            env={"FAKE_ENV": "1"},
             **TEXT_SUBPROCESS_KWARGS,
         )
 
+    @patch("depshieldx.sandbox.subprocess_env", return_value={"FAKE_ENV": "1"})
     @patch("depshieldx.sandbox.subprocess.run")
-    def test_docker_daemon_available_uses_tolerant_utf8_decoding(self, mock_run):
+    def test_docker_daemon_available_uses_tolerant_utf8_decoding(self, mock_run, _mock_subprocess_env):
         mock_run.return_value = subprocess.CompletedProcess(
             args=["docker", "info"],
             returncode=0,
@@ -341,6 +344,7 @@ class SandboxHelpersTests(unittest.TestCase):
             ["docker", "info"],
             check=True,
             capture_output=True,
+            env={"FAKE_ENV": "1"},
             **TEXT_SUBPROCESS_KWARGS,
         )
 

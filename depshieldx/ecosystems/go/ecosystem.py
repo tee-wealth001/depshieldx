@@ -51,6 +51,7 @@ from .registry import (
     hash1_of_zip,
 )
 from ...core.resolver import ResolutionResult
+from ...core.runtime import subprocess_env
 
 # The scratch module's own name, used only for the bare "resolve a module
 # path with no existing project" flow -- excluded from the parsed `go
@@ -73,7 +74,11 @@ def resolve_go_tool(name: str) -> str:
 
 
 def _run(args: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    # env=subprocess_env() strips sys._MEIPASS back out of PATH before an
+    # external toolchain subprocess inherits it -- see core/runtime.py's
+    # module docstring for the real, confirmed DLL-resolution conflict
+    # this prevents.
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=subprocess_env())
 
 
 def _command_error(result: subprocess.CompletedProcess, action: str) -> str:

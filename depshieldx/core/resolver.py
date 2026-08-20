@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import List
 from urllib.parse import urlparse
 
-from .runtime import pip_command
+from .runtime import pip_command, subprocess_env
 
 
 @dataclass
@@ -197,6 +197,7 @@ def resolve_install_inputs(
             check=True,
             capture_output=True,
             text=True,
+            env=subprocess_env(),
         )
     except subprocess.CalledProcessError as exc:
         if report_path:

@@ -61,6 +61,7 @@ from .registry import (
     latest_version,
 )
 from ...core.resolver import ResolutionResult
+from ...core.runtime import subprocess_env
 
 _SCRATCH_GEMFILE_NAME = "Gemfile"
 
@@ -78,7 +79,11 @@ def resolve_bundle_tool(name: str) -> str:
 
 
 def _run(args: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    # env=subprocess_env() strips sys._MEIPASS back out of PATH before an
+    # external toolchain subprocess inherits it -- see core/runtime.py's
+    # module docstring for the real, confirmed DLL-resolution conflict
+    # this prevents.
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=subprocess_env())
 
 
 def _command_error(result: subprocess.CompletedProcess, action: str) -> str:
@@ -285,7 +290,7 @@ class RubyGemsEcosystem:
                 pending = list(resolution.resolved_versions.items())
                 for name, version in pending[:-1]:
                     command = [resolve_bundle_tool("bundle"), "add", name, "--version", version]
-                    result = subprocess.run(command, capture_output=True, text=True)
+                    result = subprocess.run(command, capture_output=True, text=True, env=subprocess_env())
                     if result.returncode != 0:
                         raise RuntimeError(_command_error(result, f"bundle add could not pin {name}@{version}"))
                 last_name, last_version = pending[-1]
@@ -318,6 +323,7 @@ class RubyGemsEcosystem:
             [resolve_bundle_tool("bundle"), "config", "set", "frozen", "true"],
             capture_output=True,
             text=True,
+            env=subprocess_env(),
         )
         return [resolve_bundle_tool("bundle"), "install"]
 

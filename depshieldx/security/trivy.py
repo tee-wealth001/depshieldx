@@ -16,6 +16,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
+from ..core.runtime import subprocess_env
+
 
 def _is_trivy_installed() -> bool:
     """Check if Trivy is installed and available."""
@@ -24,6 +26,7 @@ def _is_trivy_installed() -> bool:
             ["trivy", "--version"],
             capture_output=True,
             timeout=5,
+            env=subprocess_env(),
         )
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -122,6 +125,7 @@ def scan_container_image(image: str, severity: str = "HIGH") -> Tuple[bool, List
             capture_output=True,
             timeout=120,  # Container scans can take time
             text=True,
+            env=subprocess_env(),
         )
 
         if result.returncode not in (0, 1):
@@ -192,6 +196,7 @@ def scan_filesystem(path: str, severity: str = "HIGH") -> Tuple[bool, List[Dict]
             capture_output=True,
             timeout=120,
             text=True,
+            env=subprocess_env(),
         )
 
         if result.returncode not in (0, 1):
@@ -238,6 +243,7 @@ def get_trivy_status() -> Dict[str, any]:
                 capture_output=True,
                 timeout=5,
                 text=True,
+                env=subprocess_env(),
             )
             version = result.stdout.strip()
         except Exception:
