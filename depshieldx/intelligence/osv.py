@@ -131,9 +131,20 @@ async def _async_fetch_osv_cves_inner(
     return vulns
 
 
-async def _async_fetch_osv_cves(package_name: str, ecosystem: str = "pypi") -> Tuple[str, List[VersionVulnerability]]:
-    """Async: Fetch CVEs from OSV with retry logic."""
+async def _async_fetch_osv_cves(
+    package_name: str, ecosystem: str = "pypi"
+) -> Tuple[str, List[VersionVulnerability], List[str]]:
+    """Async: Fetch CVEs from OSV with retry logic.
+
+    OSV is a blocking source (see scanner.py) -- a silently swallowed
+    exception here previously made a real lookup failure indistinguishable
+    from "checked OSV, found nothing," letting a scan report clean when it
+    actually couldn't check at all. The third return element surfaces that
+    failure as a warning instead, the same "lookup unavailable" convention
+    already used for GitHub Advisories/deps.dev/CISA KEV.
+    """
     vulns = []
+    warnings: List[str] = []
     try:
         async with aiohttp.ClientSession() as session:
             vulns = await _async_retry(
@@ -144,5 +155,5 @@ async def _async_fetch_osv_cves(package_name: str, ecosystem: str = "pypi") -> T
                 max_retries=MAX_RETRIES,
             )
     except Exception as e:
-        pass
-    return "osv", vulns
+        warnings.append(f"OSV lookup unavailable for {package_name}: {e}")
+    return "osv", vulns, warnings

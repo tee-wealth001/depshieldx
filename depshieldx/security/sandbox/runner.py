@@ -530,14 +530,17 @@ def prepare_cargo_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
             vendor_entry = Path(temp_dir) / "vendor" / f"{name}-{version}"
             vendor_entry.mkdir(parents=True, exist_ok=True)
             with tarfile.open(artifact_path, "r:gz") as archive:
-                # filter="data" (path-traversal/symlink hardening) only
-                # exists from Python 3.12 -- this codebase supports 3.11+
-                # (pyproject.toml), so fall back cleanly on older
-                # interpreters rather than crash with TypeError.
-                try:
-                    archive.extractall(vendor_entry, filter="data")
-                except TypeError:
-                    archive.extractall(vendor_entry)
+                # filter="data" (path-traversal/symlink hardening, PEP 706)
+                # was backported to Python 3.11.4 -- confirmed directly
+                # against the official 3.11 changelog -- which is exactly
+                # this project's own requires-python floor (pyproject.toml),
+                # so every supported interpreter has it. Deliberately no
+                # except/fallback here: silently downgrading to unfiltered
+                # extractall on any TypeError would turn a real
+                # path-traversal defense into a no-op the moment it's
+                # needed, for a case that isn't actually reachable on a
+                # supported interpreter anyway.
+                archive.extractall(vendor_entry, filter="data")
             # .crate tarballs contain one top-level "<name>-<version>/" dir
             # (confirmed directly) -- flatten it so vendor_entry's contents
             # match the layout `cargo vendor` itself produces.

@@ -468,6 +468,32 @@ class CargoSandboxTests(unittest.TestCase):
         finally:
             cleanup_download_bundle(bundle)
 
+    def test_prepare_cargo_download_bundle_rejects_path_traversal_in_malicious_crate(self):
+        """A malicious (but real, checksum-consistent) crate could still ship a
+        tar entry that resolves outside the vendor directory -- checksum
+        verification only proves the bytes match what crates.io served, not
+        that the tar entries themselves are safe. filter="data" must be
+        applied unconditionally (no silent unfiltered fallback) so this
+        raises instead of writing outside the temp vendor tree."""
+        fake_ecosystem = unittest.mock.Mock()
+        fake_ecosystem.selected_artifact_entries.return_value = [
+            ("evil", "1.0.0", {"url": "https://static.crates.io/crates/evil/evil-1.0.0.crate"}),
+        ]
+
+        def fake_fetch(_artifact, destination):
+            target = Path(destination) / "evil-1.0.0.crate"
+            with tarfile.open(target, "w:gz") as archive:
+                info = tarfile.TarInfo(name="../../evil.txt")
+                data = b"pwned"
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+            return target
+
+        fake_ecosystem.fetch_artifact.side_effect = fake_fetch
+
+        with self.assertRaises(tarfile.OutsideDestinationError):
+            prepare_cargo_download_bundle(fake_ecosystem, {"evil": "1.0.0"})
+
     @patch("depshieldx.sandbox._run_command")
     @patch("depshieldx.sandbox.subprocess.run")
     def test_ensure_cargo_sandbox_image_skips_build_when_image_present(self, mock_run, mock_run_command):
