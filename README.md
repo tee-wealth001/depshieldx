@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/depshieldx.svg)](https://pypi.org/project/depshieldx/)
 [![Docs](https://img.shields.io/badge/docs-github%20pages-10b981)](https://tee-wealth001.github.io/depshieldx/)
 
-`depshieldx` is a safer wrapper around package install and scan workflows, for PyPI (Python), npm/yarn/pnpm (JavaScript), Cargo/crates.io (Rust), Go modules, and Maven/Maven Central (Java) -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), and [Maven / Maven Central Support](#maven--maven-central-support) for the ecosystem-specific details.
+`depshieldx` is a safer wrapper around package install and scan workflows, for PyPI (Python), npm/yarn/pnpm (JavaScript), Cargo/crates.io (Rust), Go modules, Maven/Maven Central (Java), and NuGet/NuGet.org (.NET) -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), [Maven / Maven Central Support](#maven--maven-central-support), and [NuGet Support](#nuget-support) for the ecosystem-specific details.
 
 Before installing, it resolves the full package set, checks provenance for the exact artifacts that would be used, queries four vulnerability sources for the resolved versions, and can optionally run a deeper Docker + Trivy validation path with real behavioral tracing of the sandboxed install. Every completed install or scan also writes signed local receipt JSON files.
 
@@ -32,6 +32,7 @@ That said, `depshieldx` doesn't reimplement `pip` or `npm` -- it wraps the real 
 - Using it against **Cargo/crates.io** packages only requires a Rust toolchain (`cargo`) on the host -- no Python needed at all, in either distribution.
 - Using it against **Go modules** only requires a Go toolchain (`go`) on the host -- no Python needed at all, in either distribution.
 - Using it against **Maven/Maven Central** packages only requires a Java + Maven toolchain (`mvn`) on the host -- no Python needed at all, in either distribution.
+- Using it against **NuGet/NuGet.org** packages only requires a .NET SDK (`dotnet`) on the host -- no Python needed at all, in either distribution.
 - **Deep mode**, for any ecosystem, additionally requires Docker.
 
 Project links:
@@ -42,14 +43,14 @@ Project links:
 
 ## What It Does
 
-- resolves the full dependency set before installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, or Maven/Maven Central
-- checks provenance for the selected release artifacts (PyPI attestations, or npm's SLSA provenance attestations -- both verified cryptographically via real Sigstore bundle verification, not just presence checks; crates.io and Go modules have no equivalent per-package attestation infrastructure, so Cargo and Go packages get structural checks instead -- yanked/retracted-release status, registry metadata -- rather than cryptographic verification. Go's checksums are still verified cryptographically, just transparently inside the `go` toolchain itself, not as a separate `depshieldx` step. Maven combines checksum + structural PGP-presence checks with real cryptographic Sigstore verification where a publisher has opted in, since January 2025)
+- resolves the full dependency set before installation, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, or NuGet/NuGet.org
+- checks provenance for the selected release artifacts (PyPI attestations, or npm's SLSA provenance attestations -- both verified cryptographically via real Sigstore bundle verification, not just presence checks; crates.io and Go modules have no equivalent per-package attestation infrastructure, so Cargo and Go packages get structural checks instead -- yanked/retracted-release status, registry metadata -- rather than cryptographic verification. Go's checksums are still verified cryptographically, just transparently inside the `go` toolchain itself, not as a separate `depshieldx` step. Maven combines checksum + structural PGP-presence checks with real cryptographic Sigstore verification where a publisher has opted in, since January 2025. NuGet combines a real cryptographic checksum check against the registry's own published hash with structural repository-signature presence -- NuGet.org has no Sigstore equivalent, but it does unconditionally repository-sign every package with an X.509/Authenticode signature)
 - queries 4 vulnerability sources for the resolved package versions:
   - OSV
   - GitHub Advisories
   - CISA KEV
   - deps.dev
-- supports a deeper Docker + Trivy scan mode, plus real syscall-level behavioral tracing during sandboxed installs, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, and Maven/Maven Central
+- supports a deeper Docker + Trivy scan mode, plus real syscall-level behavioral tracing during sandboxed installs, for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, and NuGet/NuGet.org
 - writes signed local receipts for installs and scans
 
 ## Quick Start
@@ -119,7 +120,7 @@ Windows support is improving, but macOS and Linux still have the broadest day-to
 
 Plain `install` and plain `scan` default to `fast`.
 
-`deep` is supported for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, and Maven/Maven Central input.
+`deep` is supported for PyPI, npm/yarn/pnpm, Cargo/crates.io, Go modules, Maven/Maven Central, and NuGet/NuGet.org input.
 
 ### Fast mode
 
@@ -142,7 +143,7 @@ Deep mode does everything in fast mode first, then:
 
 For `install --deep`, the host install only happens after the fast checks and the Docker + Trivy stage both pass.
 
-`depshieldx` shells out to the local `pip` (or, for npm, the local `npm`; for Cargo, the local `cargo`; for Go, the local `go`; for Maven, the local `mvn`) for resolution, download, and host install steps, so keeping those tools up to date is part of the security model.
+`depshieldx` shells out to the local `pip` (or, for npm, the local `npm`; for Cargo, the local `cargo`; for Go, the local `go`; for Maven, the local `mvn`; for NuGet, the local `dotnet`) for resolution, download, and host install steps, so keeping those tools up to date is part of the security model.
 
 For PyPI, deep mode also traces filesystem writes, subprocess launches, and network access in-process during the sandboxed install (via `sys.addaudithook`) and actively blocks disallowed ones in real time. For npm, which has no equivalent in-process hook, behavioral tracing instead wraps the sandboxed `npm install` in `strace`, observing the same categories of activity across the whole install (including lifecycle scripts) rather than blocking individual syscalls live -- filesystem/network isolation is still enforced by the container itself either way. The npm sandbox runs in a small `node:20` + `strace` image `depshieldx` builds and caches locally the first time it's needed.
 
@@ -151,6 +152,8 @@ Cargo/crates.io behavioral tracing works the same way as npm's: the sandboxed `c
 Go modules behavioral tracing works the same way: the sandboxed `go build` runs wrapped in `strace`, observing filesystem, process, and network activity (`init()` functions and `//go:generate`-produced code are Go's equivalent of Cargo's `build.rs`/proc-macros) rather than blocking individual syscalls live. The Go sandbox runs in a small `golang:1-bookworm` + `strace` image built and cached locally the first time it's needed. Like Cargo, Trivy scans a host-side `go.mod`/`go.sum` pair built before the container runs -- Trivy reads Go's manifest files natively, needing no extracted source tree the way Cargo's vendor directory does. One Go-specific wrinkle: unlike Cargo (which compiles every declared dependency regardless of use), Go only compiles what's actually imported, so a scratch program blank-imports every resolved module to force real compilation -- and not every module has an importable root package (some are subpackage-only, e.g. `golang.org/x/crypto`). Those are skipped from tracing rather than failing the whole build, and listed in the full JSON report's `skipped_modules`.
 
 Maven behavioral tracing is different in one fundamental way: unlike Cargo's `build.rs` or Go's `init()`, a jar consumed as a plain Maven dependency has no code that runs automatically just by being resolved, or even sitting on the compile classpath. The one real exception is an annotation processor registered via `META-INF/services` (Lombok, MapStruct, Dagger, and similar) -- `javac` auto-discovers and invokes it during any compile it's present for, regardless of whether the compiled source actually uses its target annotations. So the sandboxed `mvn compile` (against a trivial scratch source file, wrapped in `strace`) traces real activity for that class of dependency, and genuinely zero extra activity for the (large majority) of ordinary libraries that register no processor -- an accurate verdict, not a coverage gap. The Maven sandbox runs in a small `maven:3-eclipse-temurin-21` + `strace` image built and cached locally the first time it's needed, with Maven's own default-lifecycle plugin set pre-warmed into the image at build time (a real, Maven-specific requirement: `compile` is itself a Maven plugin goal, needing dozens of plugin/dependency jars resolved before it can run at all, which the sandbox can't fetch once it's offline). Like Cargo/Go, Trivy scans a host-side scratch `pom.xml` built before the container runs, listing every resolved coordinate as a pinned direct dependency.
+
+NuGet behavioral tracing has the broadest code-execution surface of the four compiled ecosystems: a `.nupkg` consumed as a plain `PackageReference` has no code that runs automatically during `dotnet restore` alone, but any package shipping a `build/*.targets` or `build/*.props` file gets it imported and evaluated during `dotnet build` -- not a narrow processor-registration mechanism like Maven's, but MSBuild's own general build-time extensibility point, available to any package that uses it. So the sandboxed `dotnet build` (against a trivial scratch source file, wrapped in `strace`) traces this real, broader surface. The NuGet sandbox runs in a small `mcr.microsoft.com/dotnet/sdk:8.0` + `strace` image built and cached locally the first time it's needed -- no plugin pre-warming needed, unlike Maven's `compile` goal. Like Cargo/Go/Maven, Trivy scans a host-side `packages.lock.json` built before the container runs (via a real, networked `dotnet restore` against the resolved set) -- Trivy's NuGet support needs a real lock file, detecting nothing from a bare `.csproj`.
 
 ## Install vs Scan
 
@@ -302,6 +305,42 @@ What's still explicitly **not** supported for Maven:
 - the [routing shim](#routing) -- Maven has no native "add a dependency" CLI command to intercept
 - `pom.xml`-as-input -- only explicit `groupId:artifactId[:version]` coordinates via `--ecosystem maven` are accepted, no lockfile or manifest auto-detection
 
+## NuGet Support
+
+`depshieldx` can resolve, check, and install NuGet packages too, with full fast and deep mode support.
+
+Two ways to point it at NuGet:
+
+**A `packages.lock.json` file in the current directory** -- auto-detected by filename, no flag needed:
+
+```bash
+depshieldx scan --lockfile packages.lock.json
+depshieldx install --lockfile packages.lock.json
+```
+
+**One or more bare package names** -- pass `--ecosystem nuget` so `depshieldx` knows they aren't PyPI names:
+
+```bash
+depshieldx scan Newtonsoft.Json --ecosystem nuget
+depshieldx install Newtonsoft.Json --ecosystem nuget
+depshieldx install Newtonsoft.Json@13.0.3 --ecosystem nuget
+```
+
+A bare package name (no version) resolves to that package's latest version via NuGet.org's search API. Resolution shells out to the real `dotnet restore` CLI against a scratch `.csproj` in an isolated temp directory to compute the full, accurate transitive dependency graph, the same reasoning as Cargo's/Go's/Maven's scratch-project resolve.
+
+If you have the [routing shim](#routing) enabled, `dotnet add package <name>` is also intercepted automatically and routed through `depshieldx install <name> --ecosystem nuget` -- you don't need to change your muscle memory.
+
+"Install" here means `dotnet add package` -- adding the package to your project's `.csproj`/`packages.lock.json`. Unlike Maven, `depshieldx uninstall` is supported for NuGet, via `dotnet remove package`. Both directions are scoped to exactly one package per invocation -- `dotnet add package`/`dotnet remove package` themselves only ever accept a single package name.
+
+`--deep` is supported for NuGet the same way it is for PyPI, npm, Cargo, Go, and Maven: the resolved package set (every real `.nupkg`) is fetched into a sandboxed container (`mcr.microsoft.com/dotnet/sdk:8.0` + `strace`) and scanned with Trivy against a real, host-generated `packages.lock.json` -- Trivy's NuGet support needs a real lock file, it detects nothing from a bare `.csproj`. The sandboxed `dotnet build` is traced with `strace` for filesystem, process, and network activity -- see [Modes](#modes) for details. Unlike Maven's narrow annotation-processor exception, any package shipping a `build/*.targets` or `build/*.props` file gets it imported and evaluated during `dotnet build`, MSBuild's own general build-time extensibility point.
+
+Provenance checks for NuGet combine a real cryptographic checksum check (SHA-512, verified against the exact hash NuGet.org's registration API publishes for that release) with structural repository-signature presence -- NuGet.org has no Sigstore/SLSA equivalent, but unlike Maven's opt-in PGP/Sigstore signing, it does unconditionally repository-sign every package it hosts with an X.509/Authenticode signature -- see [Provenance And Attestations](#provenance-and-attestations).
+
+What's still explicitly **not** supported for NuGet:
+
+- `.csproj`-as-input -- only `packages.lock.json` or bare package names via `--ecosystem nuget` are accepted
+- cryptographic chain verification of the repository signature -- `depshieldx` has no trust-root/certificate-chain-validation story for X.509 elsewhere, so presence is recorded structurally, the same way Maven's PGP-signature presence is
+
 ## Commands
 
 Main commands:
@@ -452,17 +491,27 @@ depshieldx install com.google.code.gson:gson:2.11.0 --ecosystem maven
 depshieldx install org.apache.commons:commons-lang3 --ecosystem maven
 ```
 
+NuGet packages and lockfiles:
+
+```bash
+depshieldx scan Newtonsoft.Json --ecosystem nuget
+depshieldx install Newtonsoft.Json@13.0.3 --ecosystem nuget
+depshieldx scan --lockfile packages.lock.json
+depshieldx install --lockfile packages.lock.json
+```
+
 ## Supported Inputs
 
 `depshieldx` accepts:
 
-- one package name (PyPI by default, npm with `--ecosystem npm`, Cargo/crates.io with `--ecosystem cargo`, Go with `--ecosystem go`, or Maven coordinates with `--ecosystem maven`)
+- one package name (PyPI by default, npm with `--ecosystem npm`, Cargo/crates.io with `--ecosystem cargo`, Go with `--ecosystem go`, Maven coordinates with `--ecosystem maven`, or NuGet with `--ecosystem nuget`)
 - multiple package names (same ecosystem rule as above)
 - `-r requirements.txt` (PyPI only)
 - `--lockfile uv.lock` (PyPI)
 - `--lockfile package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` (npm, auto-detected by filename)
 - `--lockfile Cargo.lock` (Cargo, auto-detected by filename)
 - `--lockfile go.sum` (Go, auto-detected by filename)
+- `--lockfile packages.lock.json` (NuGet, auto-detected by filename)
 - `--pyproject pyproject.toml` (PyPI only)
 
 Maven has no canonical lockfile, so it has no `--lockfile` equivalent -- coordinates are always passed explicitly via `--ecosystem maven`.
@@ -473,6 +522,7 @@ Current lockfile behavior:
 - `package-lock.json`, `yarn.lock`, and `pnpm-lock.yaml` are parsed directly
 - `Cargo.lock` is parsed directly; if the same crate is pinned at two different major versions, only the newest resolved version is kept and the older entry is silently dropped
 - `go.sum` resolution reads the sibling `go.mod`'s full resolved module graph (via `go list -m all`) rather than parsing `go.sum` itself, since `go.sum` is a checksum allowlist, not the resolved graph -- it can list more module versions than actually ship
+- `packages.lock.json` is parsed directly; if a package appears across multiple target frameworks with disagreeing versions, only the newest resolved version is kept, the same "keep the newest" rule as `Cargo.lock`
 - other PyPI lockfile-style inputs are treated like requirement-style pinned targets
 
 ## Output Modes
@@ -549,7 +599,7 @@ For multi-package installs, the summary also includes:
 
 - a requested-package source breakdown
 - one receipt path per requested package
-- one project link (PyPI, npm, crates.io, or pkg.go.dev) per requested package when relevant
+- one project link (PyPI, npm, crates.io, pkg.go.dev, or nuget.org) per requested package when relevant
 
 ## Provenance And Attestations
 
@@ -588,6 +638,12 @@ For Maven/Maven Central, provenance combines a checksum with structural and (whe
 - checksum verification (SHA-256 where Central publishes one, falling back to SHA-1 for older releases -- MD5 is never trusted, it's cryptographically broken)
 - whether the resolved artifact has a PGP signature (Central has required these since the 2010s) -- presence is recorded structurally only, since there's no central root of trust binding an arbitrary PGP key to a real-world identity the way Sigstore's Fulcio certificates are
 - whether the resolved artifact has a Sigstore bundle and, if so, whether it verifies successfully (a real cryptographic check, not just presence) -- supported by Maven Central's Publisher Portal since January 2025, but still new and opt-in; most published artifacts don't have one yet
+
+For NuGet/NuGet.org, provenance combines a real cryptographic checksum check with structural signature-presence:
+
+- checksum verification (SHA-512, verified against the exact hash NuGet.org's own registration API publishes for that release -- a real cryptographic hash comparison, not a structural check)
+- whether the resolved package has a repository signature -- NuGet.org unconditionally repository-signs every package it hosts with an X.509/Authenticode signature, so presence is checked directly against the `.nupkg`'s own signature entry, but the certificate chain itself is not cryptographically validated, the same "presence, not chain verification" limitation as Maven's PGP-signature check
+- whether the resolved version is unlisted (NuGet's structural yank-equivalent) or marked deprecated
 
 Either way, a block only happens when verification was actually attempted and failed -- not attestations being absent at all, since most packages on PyPI and npm don't publish them, Cargo/Go have no per-package attestations to check in the first place, and most Maven artifacts published today are PGP-only, not yet Sigstore-signed.
 
@@ -639,7 +695,7 @@ Receipts include package-level details such as:
 
 ## Routing
 
-`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, `cargo add <crate>`, and `go get <module>` commands go through `depshieldx`.
+`depshieldx` can optionally install small shims so simple `pip install <package>`, `npm install [package]`, `yarn install`, `pnpm install`, `cargo add <crate>`, `go get <module>`, and `dotnet add package <name>` commands go through `depshieldx`.
 
 ```bash
 depshieldx routing status
@@ -649,8 +705,8 @@ depshieldx routing disable
 
 Routing is platform-aware:
 
-- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`, `go`)
-- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`, `go.bat`)
+- on macOS and Linux it creates shell shims (`pip`, `npm`, `yarn`, `pnpm`, `cargo`, `go`, `dotnet`)
+- on Windows it creates batch shims (`pip.bat`, `npm.bat`, `yarn.bat`, `pnpm.bat`, `cargo.bat`, `go.bat`, `dotnet.bat`)
 
 What each shim intercepts:
 
@@ -660,8 +716,9 @@ What each shim intercepts:
 - `yarn add <package>` / `pnpm add <package>` are **not** intercepted yet -- ad-hoc resolution in this phase only covers `npm install <package>`, so yarn/pnpm named installs pass straight through to the real tool
 - `cargo add <crate...>` -- one or more crate names with no other flags, routed through `depshieldx install <crate...> --ecosystem cargo`. `cargo install` (binary crates) is not intercepted -- depshieldx's cargo support only covers `cargo add`
 - `go get <module...>` -- one or more module paths with no other flags, routed through `depshieldx install <module...> --ecosystem go`. `go install` (binary programs) is not intercepted -- depshieldx's Go support only covers `go get`
+- `dotnet add package <name>` / `dotnet add package <name> --version <version>` -- exactly one package, no other flags, routed through `depshieldx install <name>[@version] --ecosystem nuget`. No project positional and no other `dotnet add package` flags (`--framework`, `--prerelease`, ...) are intercepted -- anything beyond this exact shape passes straight through to the real `dotnet`
 
-There is no Maven shim, and none is planned -- unlike `pip install`/`npm install`/`cargo add`/`go get`, `mvn` has no native CLI verb for "add a dependency" to intercept in the first place; Maven dependencies are added by editing `pom.xml` directly. See [Maven / Maven Central Support](#maven--maven-central-support).
+There is no Maven shim, and none is planned -- unlike `pip install`/`npm install`/`cargo add`/`go get`/`dotnet add package`, `mvn` has no native CLI verb for "add a dependency" to intercept in the first place; Maven dependencies are added by editing `pom.xml` directly. See [Maven / Maven Central Support](#maven--maven-central-support).
 
 Anything else (flags mixed in with a package name, other subcommands like `run`, global installs) passes straight through to the real tool untouched.
 
@@ -702,17 +759,18 @@ depshieldx ui
 
 ## Limitations
 
-- deep mode depends on Docker being available (for npm, a small local `node:20` + `strace` image is built on first use; for Cargo, a small local `rust:1-slim` + `strace` image is built on first use; for Go, a small local `golang:1-bookworm` + `strace` image is built on first use; for Maven, a small local `maven:3-eclipse-temurin-21` + `strace` image, with Maven's own default-lifecycle plugin set pre-warmed in, is built on first use -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), and [Maven / Maven Central Support](#maven--maven-central-support))
+- deep mode depends on Docker being available (for npm, a small local `node:20` + `strace` image is built on first use; for Cargo, a small local `rust:1-slim` + `strace` image is built on first use; for Go, a small local `golang:1-bookworm` + `strace` image is built on first use; for Maven, a small local `maven:3-eclipse-temurin-21` + `strace` image, with Maven's own default-lifecycle plugin set pre-warmed in, is built on first use; for NuGet, a small local `mcr.microsoft.com/dotnet/sdk:8.0` + `strace` image is built on first use -- see [npm / yarn / pnpm Support](#npm--yarn--pnpm-support), [Cargo / crates.io Support](#cargo--cratesio-support), [Go Modules Support](#go-modules-support), [Maven / Maven Central Support](#maven--maven-central-support), and [NuGet Support](#nuget-support))
 - deep mode also depends on Trivy being installed
 - deep mode is slower than fast mode
-- npm's, Cargo's, Go's, and Maven's behavioral tracing (Docker deep mode) all observe syscalls via `strace` rather than actively blocking them in real time the way PyPI's in-process guards do; filesystem/network isolation is still enforced by the container itself either way
+- npm's, Cargo's, Go's, Maven's, and NuGet's behavioral tracing (Docker deep mode) all observe syscalls via `strace` rather than actively blocking them in real time the way PyPI's in-process guards do; filesystem/network isolation is still enforced by the container itself either way
 - the safety guarantees depend in part on the local Python and `pip` versions
 - Cargo resolution, install, and deep mode all shell out to a local `cargo` on `PATH`; there is no preflight check for this, so a missing Rust toolchain only surfaces later, as a resolution failure
 - Go resolution, install, and deep mode all shell out to a local `go` on `PATH` the same way; there is no preflight check for this either, so a missing Go toolchain only surfaces later, as a resolution failure
 - Maven resolution, install, and deep mode all shell out to a local `mvn` on `PATH` the same way; there is no preflight check for this either, so a missing Java/Maven toolchain only surfaces later, as a resolution failure
-- `Cargo.lock` parsing keeps only the newest resolved version when the same crate appears pinned at two different major versions; the older entry is silently dropped
+- NuGet resolution, install, and deep mode all shell out to a local `dotnet` on `PATH` the same way; there is no preflight check for this either, so a missing .NET SDK only surfaces later, as a resolution failure
+- `Cargo.lock` parsing keeps only the newest resolved version when the same crate appears pinned at two different major versions; the older entry is silently dropped -- `packages.lock.json` parsing follows the same "keep the newest" rule when a package disagrees across target frameworks
 - not every Go module resolved for deep mode has an importable root package (some are subpackage-only, e.g. `golang.org/x/crypto`); those are skipped from behavioral tracing rather than failing the whole sandboxed build, and listed in the full JSON report's `skipped_modules`
-- some packages publish no PyPI or npm attestations at all; that is usually informational, not a red flag -- Cargo/crates.io and Go modules have no per-package attestation infrastructure at all, so this is categorically true for every crate/module, not just some; Maven has real Sigstore support but it's still new and opt-in, so most Maven artifacts today are in the same boat
+- some packages publish no PyPI or npm attestations at all; that is usually informational, not a red flag -- Cargo/crates.io and Go modules have no per-package attestation infrastructure at all, so this is categorically true for every crate/module, not just some; Maven has real Sigstore support but it's still new and opt-in, so most Maven artifacts today are in the same boat; NuGet has no Sigstore equivalent at all
 - attestation verification can depend on upstream trust metadata availability
 - npm's own "publish" attestation (signed with npm registry's own key, not a Fulcio certificate) is recorded structurally but not cryptographically verified -- only npm's SLSA provenance attestation is, since that's the one signed via GitHub Actions OIDC the same way PyPI's Trusted Publishing attestations are
 - Cargo has no cryptographic provenance verification at all -- crates.io currently has nothing equivalent to verify against
@@ -720,6 +778,8 @@ depshieldx ui
 - Maven's Sigstore verification only recognizes one confirmed-real OIDC issuer (GitHub Actions) for now -- a real signature from a different, equally-legitimate issuer is recorded as "signed via Sigstore, but by an unrecognized issuer" (informational), not verified as trusted
 - a BOM import's version that's a `${property}` placeholder is resolved for Maven deep mode only against that same POM's own `<properties>` block, not Maven's fuller cross-file property inheritance -- an unresolvable entry is skipped rather than guessed at, and surfaces as a clear Maven error from the sandboxed build if it turns out to matter
 - there is no Maven routing shim -- see [Routing](#routing)
+- NuGet's repository-signature check is presence-only, not a real certificate-chain validation -- `depshieldx` has no trust-root story for X.509 elsewhere, so a forged or expired certificate chain would still record as "signed"
+- both `dotnet add package` and `dotnet remove package` (and so `depshieldx`'s own NuGet install/uninstall/routing) are scoped to exactly one package per invocation -- the real `dotnet` CLI itself doesn't accept more than one package name at a time
 - vulnerability-source coverage depends on the upstream services
 
 ## FAQ
