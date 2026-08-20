@@ -122,6 +122,15 @@ class RouteDartTests(unittest.TestCase):
     def test_does_not_intercept_with_extra_flags(self):
         self.assertIsNone(_extract_simple_dart_pub_add_targets(["pub", "add", "http", "--dry-run"]))
 
+    def test_does_not_intercept_non_hosted_descriptor_syntax(self):
+        self.assertIsNone(_extract_simple_dart_pub_add_targets(["pub", "add", "foo@{path: ../foo}"]))
+        self.assertIsNone(_extract_simple_dart_pub_add_targets(["pub", "add", "foo@{git: https://github.com/foo/foo}"]))
+        self.assertIsNone(_extract_simple_dart_pub_add_targets(["pub", "add", "foo@{sdk: flutter}"]))
+
+    def test_does_not_intercept_section_prefixes(self):
+        self.assertIsNone(_extract_simple_dart_pub_add_targets(["pub", "add", "dev:foo"]))
+        self.assertIsNone(_extract_simple_dart_pub_add_targets(["pub", "add", "override:foo@1.0.0"]))
+
     def test_does_not_intercept_versioned_descriptor_syntax(self):
         # "http@^1.2.3" itself has no leading "-" so it's still captured as
         # a target string -- depshieldx's own install command downstream

@@ -281,11 +281,26 @@ def _extract_simple_dart_pub_add_targets(args):
     # see ecosystems/pub/ecosystem.py's module docstring), so this
     # mirrors cargo/go's multi-target shim shape, not NuGet's
     # single-target one.
+    #
+    # `dart pub add` also accepts non-hosted descriptor syntax (`"foo@
+    # {path: ../foo}"`, `"foo@{git: ...}"`, `"foo@{hosted: ...}"`,
+    # `"foo@{sdk: flutter}"`) and section prefixes (`dev:foo`,
+    # `override:foo@1.0.0`) -- confirmed directly against a real `dart
+    # pub add --help`. None of these are hosted (pub.dev) package
+    # installs depshieldx's own Pub support covers, and confirmed
+    # directly the naive "no leading -" filter above would otherwise
+    # wrongly capture and mis-parse them (e.g. "dev:foo" as a literal
+    # package named "dev:foo"), so any target containing "{" or a
+    # recognized section-prefix colon bails out entirely rather than
+    # risk misinterpreting it -- the same "don't risk misinterpreting a
+    # real shape" caution NuGet's own extractor already uses.
     if len(args) < 2 or args[0] != "pub" or args[1] != "add":
         return None
     remaining = args[2:]
     targets = [arg for arg in remaining if not arg.startswith("-")]
     if not targets or len(targets) != len(remaining):
+        return None
+    if any("{" in target or target.startswith(("dev:", "override:")) for target in targets):
         return None
     return targets
 
