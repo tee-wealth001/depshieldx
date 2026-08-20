@@ -261,21 +261,30 @@ class NuGetEcosystem:
 
         algorithm = artifact.get("checksum_algorithm")
         expected_checksum = (artifact.get("checksum") or "").strip()
-        if algorithm and expected_checksum:
-            digest = hashlib.new(algorithm.lower(), artifact_bytes).digest()
-            actual_checksum = base64.b64encode(digest).decode("ascii")
-            if actual_checksum != expected_checksum:
-                raise RuntimeError(f"downloaded artifact checksum mismatch for {filename}")
+        if not (algorithm and expected_checksum):
+            # NuGet.org's registration API publishes a packageHash/
+            # packageHashAlgorithm for every real published package
+            # (confirmed directly) -- an unexpectedly missing checksum
+            # here is itself an anomaly worth refusing on, the same way
+            # a real mismatch already is below, rather than silently
+            # writing unverified bytes to disk with no signal at all.
+            raise RuntimeError(
+                f"no registry-published checksum available to verify {filename} -- refusing to trust it unverified"
+            )
+        digest = hashlib.new(algorithm.lower(), artifact_bytes).digest()
+        actual_checksum = base64.b64encode(digest).decode("ascii")
+        if actual_checksum != expected_checksum:
+            raise RuntimeError(f"downloaded artifact checksum mismatch for {filename}")
 
         destination_path.write_bytes(artifact_bytes)
         return destination_path
 
     @contextmanager
     def host_install_command(self, resolution: ResolutionResult):
-        # Fetching (via fetch_artifact, which itself has no independent
-        # checksum step -- see below) each artifact here still proves
-        # the resolved set is real and fetchable before yielding the
-        # real install command.
+        # Fetching each artifact here (via fetch_artifact, which itself
+        # checksum-verifies and raises on any mismatch or missing hash)
+        # still proves the resolved set is real, fetchable, and
+        # verified before yielding the real install command.
         artifact_entries = self.selected_artifact_entries(resolution)
         with tempfile.TemporaryDirectory(prefix="depshieldx_host_install_") as temp_dir:
             temp_path = Path(temp_dir)

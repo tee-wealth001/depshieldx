@@ -201,6 +201,54 @@ class ParseBomImportCoordinatesTests(unittest.TestCase):
         self.assertEqual(parse_bom_import_coordinates(pom_text), [])
 
 
+class MavenPomXmlEntityExpansionDosTests(unittest.TestCase):
+    """Maven Central serves whatever a publisher uploaded -- a remote POM is
+    untrusted XML. Plain xml.etree.ElementTree has no protection against a
+    billion-laughs/quadratic-blowup entity-expansion DoS; defusedxml
+    (forbid_entities=True by default) must reject any <!ENTITY> declaration
+    outright rather than expand it."""
+
+    def _billion_laughs_pom(self) -> str:
+        return """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE project [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+]>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <artifactId>&lol3;</artifactId>
+</project>
+"""
+
+    def test_parse_bom_import_coordinates_rejects_entity_expansion(self):
+        with self.assertRaises(Exception):
+            parse_bom_import_coordinates(self._billion_laughs_pom())
+
+    def test_parse_parent_coordinate_rejects_entity_expansion(self):
+        with self.assertRaises(Exception):
+            parse_parent_coordinate(self._billion_laughs_pom())
+
+    def test_ordinary_pom_without_entities_still_parses_fine(self):
+        # defusedxml's default forbid_dtd=False permits a DOCTYPE with no
+        # <!ENTITY> declarations through -- only entity expansion itself
+        # is rejected, not DTDs unconditionally.
+        pom_text = """<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.example</groupId>
+    <artifactId>example-parent</artifactId>
+    <version>1.0.0</version>
+  </parent>
+</project>
+"""
+        self.assertEqual(
+            parse_parent_coordinate(pom_text),
+            ("org.example", "example-parent", "1.0.0"),
+        )
+
+
 @pytest.mark.live
 class MavenRegistryLiveTests(unittest.TestCase):
     """Hits the real repo1.maven.org and search.maven.org. Marked live --

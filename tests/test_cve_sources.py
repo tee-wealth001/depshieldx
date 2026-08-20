@@ -10,6 +10,7 @@ from depshieldx.intelligence.models import (
     _normalize_nuget_version,
     _npm_satisfies,
     _npm_satisfies_clause,
+    _nuget_compare,
     _nuget_satisfies,
     _nuget_satisfies_clause,
 )
@@ -259,6 +260,45 @@ class NugetSatisfiesClauseTests(unittest.TestCase):
     def test_real_prerelease_boundary_range(self):
         self.assertTrue(_nuget_satisfies("7.0.0-preview", ">=7.0.0-preview,<7.1.2"))
         self.assertFalse(_nuget_satisfies("7.1.2", ">=7.0.0-preview,<7.1.2"))
+
+
+class NugetRevisionTieBreakTests(unittest.TestCase):
+    """The 4th+ numeric segment lives in semver build-metadata, which
+    SemVer 2.0.0 explicitly excludes from precedence -- without a real
+    tie-breaker, "1.0.0.1" and "1.0.0.2" would compare as exactly equal."""
+
+    def test_fourth_segment_breaks_a_tie_semver_alone_would_call_equal(self):
+        self.assertEqual(_nuget_compare("1.0.0.1", "1.0.0.2"), -1)
+        self.assertEqual(_nuget_compare("1.0.0.2", "1.0.0.1"), 1)
+        self.assertEqual(_nuget_compare("1.0.0.1", "1.0.0.1"), 0)
+
+    def test_major_minor_patch_still_takes_precedence_over_revision(self):
+        # A higher patch always wins regardless of revision.
+        self.assertEqual(_nuget_compare("1.0.1.0", "1.0.0.99"), 1)
+
+    def test_bare_version_compares_equal_to_explicit_zero_revision(self):
+        self.assertEqual(_nuget_compare("1.0.0", "1.0.0.0"), 0)
+
+    def test_missing_revision_treated_as_lower_than_a_present_one(self):
+        self.assertEqual(_nuget_compare("1.0.0", "1.0.0.1"), -1)
+
+    def test_satisfies_clause_now_distinguishes_revisions(self):
+        self.assertTrue(_nuget_satisfies_clause("1.0.0.2", ">1.0.0.1"))
+        self.assertFalse(_nuget_satisfies_clause("1.0.0.1", ">1.0.0.1"))
+
+    def test_unparseable_version_returns_none_not_a_crash(self):
+        self.assertIsNone(_nuget_compare("not-a-version", "1.0.0"))
+
+    def test_revision_plus_prerelease_combo_does_not_crash(self):
+        # _normalize_nuget_version's "+<revision>" + "-<prerelease>" ordering
+        # means a version combining both folds the prerelease's leading "-"
+        # into semver's build-metadata field instead of parsing it
+        # separately (a real, narrower pre-existing quirk this tie-breaker
+        # doesn't try to fix -- see _nuget_revision_segments's docstring).
+        # What matters here is that the non-numeric build string this
+        # produces is handled defensively, not that ordering is perfect.
+        result = _nuget_compare("1.0.0.5-beta", "1.0.0.5-beta")
+        self.assertEqual(result, 0)
 
 
 class VersionVulnerabilityNuGetTests(unittest.TestCase):

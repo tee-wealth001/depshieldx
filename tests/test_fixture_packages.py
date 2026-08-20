@@ -80,6 +80,7 @@ class FixturePackageIntegrationTests(unittest.TestCase):
                     ["fixturepkg==1.0.0"],
                     resolved_versions={"fixturepkg": "1.0.0"},
                     cache_enabled=False,
+                    require_docker=False,
                 )
 
         self.assertTrue(result.success)
@@ -102,6 +103,7 @@ class FixturePackageIntegrationTests(unittest.TestCase):
                     ["badfixture==1.0.0"],
                     resolved_versions={"badfixture": "1.0.0"},
                     cache_enabled=False,
+                    require_docker=False,
                 )
 
         self.assertFalse(result.success)

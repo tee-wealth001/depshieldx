@@ -5,6 +5,7 @@ import pytest
 
 from depshieldx.ecosystems.nuget.registry import (
     check_provenance_batch,
+    check_release,
     flat_container_nupkg_url,
 )
 
@@ -59,6 +60,75 @@ class CheckProvenanceBatchTests(unittest.TestCase):
 
         self.assertTrue(result["block"])
         self.assertIn("Demo.Package@1.0.0", result["reason"])
+
+
+@patch("depshieldx.ecosystems.nuget.registry._store_cached_result")
+@patch("depshieldx.ecosystems.nuget.registry._load_cached_result", return_value=None)
+class CheckReleaseChecksumVerificationTests(unittest.TestCase):
+    """A checksum MISMATCH is already a hard block (see
+    CheckProvenanceBatchTests.test_blocks_on_checksum_mismatch). This
+    covers the different, previously-silent case: verification couldn't
+    even be attempted -- no checksum published, or a real error while
+    trying -- which must now surface as a real "verification_unavailable"
+    signal (the same shape npm's own attestation-verification-unavailable
+    case uses, so cli/output.py already renders it) rather than being an
+    info-only message no worse than a clean, fully-verified result."""
+
+    @patch("depshieldx.ecosystems.nuget.registry.fetch_catalog_entry")
+    def test_missing_checksum_metadata_surfaces_verification_unavailable(
+        self, mock_catalog, _mock_load_cache, _mock_store_cache
+    ):
+        mock_catalog.return_value = {"listed": True, "deprecation": None, "packageHash": None, "packageHashAlgorithm": None}
+
+        result = check_release("Test.ChecksumMissing", "1.0.0")
+
+        self.assertFalse(result["block"])
+        self.assertFalse(result["signals"]["checksum_verified"])
+        self.assertIsNotNone(result["signals"]["verification_unavailable"])
+        self.assertEqual(result["signals"]["verification_unavailable"]["filename"], "Test.ChecksumMissing.1.0.0.nupkg")
+
+    @patch("depshieldx.ecosystems.nuget.registry.fetch_nupkg")
+    @patch("depshieldx.ecosystems.nuget.registry.fetch_catalog_entry")
+    def test_verification_error_surfaces_verification_unavailable(
+        self, mock_catalog, mock_fetch_nupkg, _mock_load_cache, _mock_store_cache
+    ):
+        mock_catalog.return_value = {
+            "listed": True,
+            "deprecation": None,
+            "packageHash": "abc123",
+            "packageHashAlgorithm": "SHA512",
+        }
+        mock_fetch_nupkg.side_effect = RuntimeError("simulated network failure")
+
+        result = check_release("Test.ChecksumError", "1.0.0")
+
+        self.assertFalse(result["block"])
+        self.assertFalse(result["signals"]["checksum_verified"])
+        self.assertIsNotNone(result["signals"]["verification_unavailable"])
+        self.assertIn("simulated network failure", result["signals"]["verification_unavailable"]["error"])
+
+    @patch("depshieldx.ecosystems.nuget.registry.has_repository_signature", return_value=True)
+    @patch("depshieldx.ecosystems.nuget.registry.fetch_nupkg", return_value=b"fake-nupkg-bytes")
+    @patch("depshieldx.ecosystems.nuget.registry.fetch_catalog_entry")
+    def test_successful_verification_has_no_verification_unavailable_signal(
+        self, mock_catalog, _mock_fetch_nupkg, _mock_signed, _mock_load_cache, _mock_store_cache
+    ):
+        import base64
+        import hashlib
+
+        digest = hashlib.sha512(b"fake-nupkg-bytes").digest()
+        mock_catalog.return_value = {
+            "listed": True,
+            "deprecation": None,
+            "packageHash": base64.b64encode(digest).decode("ascii"),
+            "packageHashAlgorithm": "SHA512",
+        }
+
+        result = check_release("Test.ChecksumOk", "1.0.0")
+
+        self.assertFalse(result["block"])
+        self.assertTrue(result["signals"]["checksum_verified"])
+        self.assertIsNone(result["signals"]["verification_unavailable"])
 
 
 @pytest.mark.live

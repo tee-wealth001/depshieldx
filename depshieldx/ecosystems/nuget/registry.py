@@ -217,6 +217,8 @@ def check_release(package_id: str, version: str, verbose: bool = False) -> dict:
     package_hash = catalog_entry.get("packageHash")
     package_hash_algorithm = catalog_entry.get("packageHashAlgorithm")
     signed = False
+    filename = f"{package_id}.{version}.nupkg"
+    verification_unavailable = None
     if package_hash and package_hash_algorithm:
         try:
             import base64
@@ -241,9 +243,21 @@ def check_release(package_id: str, version: str, verbose: bool = False) -> dict:
             if signed:
                 infos.append("resolved artifact has a repository signature (X.509/Authenticode-based, presence only -- see module docstring for why this isn't cryptographically verified)")
         except Exception as exc:
+            # A real hash MISMATCH above is a hard block ("possible
+            # tampering"); this is the different, non-tampering case
+            # where verification simply couldn't complete (network
+            # error, unrecognized hash algorithm, ...). Recorded via the
+            # same "verification_unavailable" signal shape npm's own
+            # attestation-verification-unavailable case already uses
+            # (see ecosystems/npm/registry.py) -- cli/output.py already
+            # renders that shape as a dedicated "Attestation
+            # infrastructure issue" summary line for any ecosystem, no
+            # NuGet-specific display code needed.
             infos.append(f"could not verify artifact checksum: {exc}")
+            verification_unavailable = {"filename": filename, "error": str(exc)}
     else:
         infos.append("no checksum published for the resolved artifact")
+        verification_unavailable = {"filename": filename, "error": "no checksum published by the registry"}
 
     result = {
         "package": package_id,
@@ -258,6 +272,7 @@ def check_release(package_id: str, version: str, verbose: bool = False) -> dict:
             "listed": listed,
             "deprecated": bool(deprecation),
             "repository_signed": signed,
+            "verification_unavailable": verification_unavailable,
         },
     }
     _store_cached_result(package_id, version, result)
