@@ -590,6 +590,101 @@ def _rubygems_satisfies(version: str, spec: str) -> bool:
     return all(_rubygems_satisfies_clause(version, clause) for clause in spec.split(","))
 
 
+# Composer's real version-comparison algorithm, ported and confirmed
+# directly against a real, currently-installed Composer's own
+# Composer\Semver\Comparator/VersionParser classes (loaded straight out
+# of a real composer.phar), not just documentation. Composer versions
+# aren't standard SemVer: a leading "v"/"V" and any "+build" metadata are
+# both stripped entirely during normalization (confirmed directly
+# neither affects comparison at all, unlike SemVer's own build-metadata-
+# excluded-but-present handling), up to 4 numeric segments are allowed
+# (missing segments zero-pad, confirmed directly "1.0" == "1.0.0" ==
+# "1.0.0.0"), and the real stability-suffix rank order is dev < alpha/a <
+# beta/b < RC/rc < stable (no suffix) < patch/p -- confirmed directly
+# this is NOT standard SemVer prerelease ordering (which has no "sorts
+# after stable" tier at all): Composer's own "patch" stability is
+# documented as being for a post-release patch, and a real comparison
+# confirms "1.0.0-patch1" > "1.0.0". A stability suffix's own trailing
+# number (e.g. "beta2" vs "beta10") compares numerically, not lexically
+# (confirmed directly), the same "don't sort mixed alpha-numeric
+# segments lexically" property Maven's/RubyGems' own comparators already
+# have to handle.
+_COMPOSER_VERSION_PATTERN = re.compile(
+    r"^[vV]?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?"
+    r"(?:[-._]?(stable|dev|alpha|a|beta|b|rc|patch|p)[-._]?(\d+)?)?$",
+    re.IGNORECASE,
+)
+_COMPOSER_STABILITY_RANK = {"dev": 0, "alpha": 1, "a": 1, "beta": 2, "b": 2, "rc": 3, "patch": 5, "p": 5}
+_COMPOSER_STABLE_RANK = 4  # no suffix at all, or the literal "stable" alias for one
+
+
+def _composer_segments(version: str) -> tuple | None:
+    # "+build" metadata is stripped before matching -- confirmed directly
+    # it's ignored entirely by Composer's own comparator, unlike SemVer's
+    # build-metadata-present-but-excluded-from-comparison handling.
+    normalized = version.strip().split("+", 1)[0]
+    match = _COMPOSER_VERSION_PATTERN.match(normalized)
+    if not match:
+        return None
+    major, minor, patch, build, stability, stability_num = match.groups()
+    numeric = tuple(int(part) if part else 0 for part in (major, minor, patch, build))
+    rank = _COMPOSER_STABILITY_RANK.get(stability.lower(), _COMPOSER_STABLE_RANK) if stability else _COMPOSER_STABLE_RANK
+    stability_number = int(stability_num) if stability_num else 0
+    return numeric, rank, stability_number
+
+
+def _composer_compare(version: str, boundary: str) -> int | None:
+    """Full ordering comparison for two Composer version strings,
+    returning -1/0/1 (or None if either has no parseable content at
+    all). Confirmed directly against real Composer\\Semver\\Comparator
+    output across every case this handles: "v"-prefix and trailing-zero-
+    segment equivalence, the real dev<alpha<beta<RC<stable<patch
+    stability rank order, and numeric-not-lexicographic stability-suffix
+    numbering."""
+    segments_a = _composer_segments(version)
+    segments_b = _composer_segments(boundary)
+    if segments_a is None or segments_b is None:
+        return None
+    if segments_a < segments_b:
+        return -1
+    if segments_a > segments_b:
+        return 1
+    return 0
+
+
+def _composer_satisfies_clause(version: str, clause: str) -> bool:
+    """True if `version` satisfies one "<op><boundary>" clause, using
+    real Composer ordering (via _composer_compare) -- mirrors the maven/
+    nuget/pub/rubygems branches' identical "bare version = exact match"
+    convention."""
+    clause = clause.strip()
+    for prefix in (">=", "<=", "==", ">", "<"):
+        if clause.startswith(prefix):
+            operator, boundary = prefix, clause[len(prefix):].strip()
+            break
+    else:
+        operator, boundary = "==", clause
+
+    comparison = _composer_compare(version, boundary)
+    if comparison is None:
+        return False
+
+    if operator == ">=":
+        return comparison >= 0
+    if operator == "<=":
+        return comparison <= 0
+    if operator == ">":
+        return comparison > 0
+    if operator == "<":
+        return comparison < 0
+    return comparison == 0
+
+
+def _composer_satisfies(version: str, spec: str) -> bool:
+    """AND across the comma-separated clauses in one affected_versions entry."""
+    return all(_composer_satisfies_clause(version, clause) for clause in spec.split(","))
+
+
 class VersionVulnerability:
     """Represents a vulnerability with version-specific information."""
 
@@ -648,6 +743,9 @@ class VersionVulnerability:
 
         if ecosystem == "rubygems":
             return self._is_current_version_vulnerable_rubygems(version)
+
+        if ecosystem == "composer":
+            return self._is_current_version_vulnerable_composer(version)
 
         try:
             check_version = Version(version)
@@ -821,6 +919,27 @@ class VersionVulnerability:
         if self.fixed_in_version:
             try:
                 comparison = _rubygems_compare(version, self.fixed_in_version)
+                if comparison is not None and comparison < 0:
+                    return True
+            except Exception:
+                pass
+
+        return False
+
+    def _is_current_version_vulnerable_composer(self, version: str) -> bool:
+        if _composer_compare(version, version) is None:
+            return True  # Unparseable installed version, assume vulnerable -- mirrors the branches above
+
+        for affected_range in self.affected_versions:
+            try:
+                if _composer_satisfies(version, affected_range):
+                    return True
+            except Exception:
+                pass
+
+        if self.fixed_in_version:
+            try:
+                comparison = _composer_compare(version, self.fixed_in_version)
                 if comparison is not None and comparison < 0:
                     return True
             except Exception:

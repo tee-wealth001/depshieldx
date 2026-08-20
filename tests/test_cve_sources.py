@@ -4,6 +4,9 @@ from depshieldx.intelligence.models import (
     VersionVulnerability,
     _cargo_satisfies,
     _cargo_satisfies_clause,
+    _composer_compare,
+    _composer_satisfies,
+    _composer_satisfies_clause,
     _maven_compare,
     _maven_satisfies,
     _maven_satisfies_clause,
@@ -470,6 +473,104 @@ class VersionVulnerabilityRubyGemsTests(unittest.TestCase):
     def test_prerelease_sorts_below_its_release(self):
         vuln = VersionVulnerability(cve_id="CVE-TEST-RG-3", source="osv", affected_versions=["<1.0.0"])
         self.assertTrue(vuln.is_current_version_vulnerable("1.0.0.rc1", ecosystem="rubygems"))
+
+
+class ComposerCompareTests(unittest.TestCase):
+    """Every case here confirmed directly against a real, currently-
+    installed Composer's own Composer\\Semver\\Comparator/VersionParser
+    output -- not just documentation -- see intelligence/models.py's
+    _composer_compare docstring."""
+
+    def test_trailing_zero_segments_are_equal(self):
+        self.assertEqual(_composer_compare("1.0", "1.0.0"), 0)
+        self.assertEqual(_composer_compare("1.0", "1.0.0.0"), 0)
+
+    def test_leading_v_prefix_is_stripped(self):
+        self.assertEqual(_composer_compare("v1.0.0", "1.0.0"), 0)
+
+    def test_build_metadata_is_stripped_entirely(self):
+        # Unlike SemVer (build metadata present but excluded from
+        # comparison), Composer strips "+build" entirely -- confirmed
+        # directly it never affects ordering at all.
+        self.assertEqual(_composer_compare("1.0.0+build123", "1.0.0"), 0)
+
+    def test_patch_stability_sorts_after_stable(self):
+        # The real, distinctive Composer finding: standard SemVer
+        # prerelease ordering has no "sorts after stable" tier at all,
+        # but Composer's own "patch" stability does -- confirmed directly
+        # against a real Composer\Semver\Comparator.
+        self.assertEqual(_composer_compare("1.0.0-patch1", "1.0.0"), 1)
+        self.assertEqual(_composer_compare("1.0.0", "1.0.0-patch1"), -1)
+
+    def test_stability_rank_order(self):
+        self.assertEqual(_composer_compare("1.0.0-dev", "1.0.0-alpha1"), -1)
+        self.assertEqual(_composer_compare("1.0.0-alpha1", "1.0.0-beta1"), -1)
+        self.assertEqual(_composer_compare("1.0.0-beta1", "1.0.0-RC1"), -1)
+        self.assertEqual(_composer_compare("1.0.0-RC1", "1.0.0"), -1)
+        self.assertEqual(_composer_compare("1.0.0", "1.0.0-patch1"), -1)
+
+    def test_stability_suffix_number_compares_numerically(self):
+        self.assertEqual(_composer_compare("1.0.0-beta2", "1.0.0-beta10"), -1)
+
+    def test_stability_suffix_is_case_insensitive(self):
+        self.assertEqual(_composer_compare("1.0.0-RC1", "1.0.0-rc1"), 0)
+
+    def test_short_alias_expands_to_full_stability(self):
+        self.assertEqual(_composer_compare("1.0.0-a1", "1.0.0-alpha1"), 0)
+        self.assertEqual(_composer_compare("1.0.0-b2", "1.0.0-beta2"), 0)
+
+    def test_satisfies_clause_uses_composer_ordering(self):
+        self.assertTrue(_composer_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_composer_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_unparseable_version_returns_none_not_a_crash(self):
+        self.assertIsNone(_composer_compare("", "1.0.0"))
+
+
+class ComposerSatisfiesClauseTests(unittest.TestCase):
+    def test_gte_boundary(self):
+        self.assertTrue(_composer_satisfies_clause("1.2.3", ">=1.2.3"))
+        self.assertFalse(_composer_satisfies_clause("1.2.2", ">=1.2.3"))
+
+    def test_lt_boundary(self):
+        self.assertTrue(_composer_satisfies_clause("1.9.9", "<2.0.0"))
+        self.assertFalse(_composer_satisfies_clause("2.0.0", "<2.0.0"))
+
+    def test_bare_version_is_exact_match(self):
+        self.assertTrue(_composer_satisfies_clause("1.2.3", "1.2.3"))
+        self.assertFalse(_composer_satisfies_clause("1.2.4", "1.2.3"))
+
+    def test_composer_satisfies_ands_comma_separated_clauses(self):
+        self.assertTrue(_composer_satisfies("1.5.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_composer_satisfies("2.0.0", ">=1.2.3,<2.0.0"))
+        self.assertFalse(_composer_satisfies("1.0.0", ">=1.2.3,<2.0.0"))
+
+
+class VersionVulnerabilityComposerTests(unittest.TestCase):
+    def test_fixed_in_version_uses_composer_ordering(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-COMPOSER-1", source="osv", fixed_in_version="1.2.3")
+        self.assertTrue(vuln.is_current_version_vulnerable("1.2.2", ecosystem="composer"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.2.3", ecosystem="composer"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.5.0", ecosystem="composer"))
+
+    def test_version_outside_range_is_not_flagged(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-COMPOSER-2", source="osv", affected_versions=[">=1.2.3,<2.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="composer"))
+
+    def test_patch_stability_prerelease_sorts_after_its_release(self):
+        # 1.0.0-patch1 is NOT caught by "<1.0.0" -- it's a real, distinct
+        # Composer finding that "patch" sorts *after* the stable release,
+        # not before it like a typical prerelease suffix would.
+        vuln = VersionVulnerability(cve_id="CVE-TEST-COMPOSER-3", source="osv", affected_versions=["<1.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("1.0.0-patch1", ecosystem="composer"))
+
+    def test_rc_prerelease_sorts_below_its_release(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-COMPOSER-4", source="osv", affected_versions=["<1.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("1.0.0-RC1", ecosystem="composer"))
+
+    def test_unparseable_installed_version_assumes_vulnerable(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-COMPOSER-5", source="osv", affected_versions=["<2.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("!!!", ecosystem="composer"))
 
 
 class VersionVulnerabilityNpmTests(unittest.TestCase):

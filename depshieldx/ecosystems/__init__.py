@@ -10,6 +10,7 @@ restructuring" section for why and the staged order this is step 1 of.
 
 from .base import Ecosystem, PackageRecord, package_records
 from .cargo import CARGO_ECOSYSTEM, CargoEcosystem, resolve_cargo_tool
+from .composer import COMPOSER_ECOSYSTEM, ComposerEcosystem, resolve_composer_tool
 from .go import GO_ECOSYSTEM, GoEcosystem, resolve_go_tool
 from .maven import MAVEN_ECOSYSTEM, MavenEcosystem, resolve_maven_tool
 from .npm import NPM_ECOSYSTEM, NpmEcosystem, resolve_node_tool
@@ -46,6 +47,9 @@ __all__ = [
     "RUBYGEMS_ECOSYSTEM",
     "RubyGemsEcosystem",
     "resolve_bundle_tool",
+    "COMPOSER_ECOSYSTEM",
+    "ComposerEcosystem",
+    "resolve_composer_tool",
     "ECOSYSTEMS",
     "ecosystem_for_name",
 ]

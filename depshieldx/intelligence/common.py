@@ -71,7 +71,14 @@ def _normalize_name(name: str, ecosystem: str = "pypi") -> str:
     treatment. RubyGems gem names are case-sensitive too (confirmed
     directly: a real lowercase "json" resolves, the uppercase "JSON"
     404s), and OSV/GHSA/deps.dev all key RubyGems entries by that exact
-    casing (confirmed directly against real query responses)."""
+    casing (confirmed directly against real query responses). Composer/
+    Packagist package names fall through to the plain lowercase path
+    below deliberately, not listed here -- confirmed directly Packagist's
+    own lookup is case-insensitive but always reports back a lowercase
+    canonical form, and OSV's own Packagist-ecosystem matching is
+    confirmed directly case-sensitive on that lowercase form, the same
+    "registry's canonical form is already case-folded" situation PyPI
+    has, not the "case genuinely matters" one this list is for."""
     if ecosystem in ("go", "maven", "nuget", "pub", "rubygems"):
         return name.strip()
     normalized = name.strip().lower()
