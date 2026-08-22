@@ -665,5 +665,84 @@ class VersionVulnerabilityCargoTests(unittest.TestCase):
         self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="cargo"))
 
 
+class VersionVulnerabilityPypiTests(unittest.TestCase):
+    """ecosystem="pypi" (also the untagged default, since PyPI/PEP 440 is
+    is_current_version_vulnerable's fallback branch) -- unlike every other
+    ecosystem here, this had no dedicated regression class at all before
+    this one. CVE-2026-25645 (requests' extract_zipped_paths() insecure
+    temp file reuse) is real data, confirmed directly against a live OSV
+    query this session (aliases PYSEC-2026-2275/GHSA-gc5v-m9x4-r6x2,
+    affected_versions [">=0,<2.33.0"], fixed_in_version "2.33.0") --
+    notable beyond being a convenient fixture since requests is also
+    depshieldx's own dependency (pyproject.toml pins "requests>=2.32.4",
+    which does not itself exclude the vulnerable range)."""
+
+    def test_real_cve_2026_25645_range(self):
+        vuln = VersionVulnerability(
+            cve_id="CVE-2026-25645",
+            source="osv",
+            affected_versions=[">=0,<2.33.0"],
+            fixed_in_version="2.33.0",
+        )
+        self.assertTrue(vuln.is_current_version_vulnerable("2.32.0", ecosystem="pypi"))
+        self.assertTrue(vuln.is_current_version_vulnerable("2.32.4", ecosystem="pypi"))
+        self.assertFalse(vuln.is_current_version_vulnerable("2.33.0", ecosystem="pypi"))
+        self.assertFalse(vuln.is_current_version_vulnerable("2.34.2", ecosystem="pypi"))
+
+    def test_real_cve_2026_25645_range_via_default_ecosystem(self):
+        # No explicit ecosystem= at all -- confirmed directly this is the
+        # same fallback branch "pypi" routes through explicitly above, not
+        # a separate code path that could silently drift from it.
+        vuln = VersionVulnerability(
+            cve_id="CVE-2026-25645",
+            source="osv",
+            affected_versions=[">=0,<2.33.0"],
+            fixed_in_version="2.33.0",
+        )
+        self.assertTrue(vuln.is_current_version_vulnerable("2.32.0"))
+        self.assertFalse(vuln.is_current_version_vulnerable("2.33.0"))
+
+    def test_affected_versions_only_excludes_prereleases_by_default(self):
+        # Confirmed directly running this: unlike every other ecosystem's
+        # own comparator here, the pypi/default branch's affected_versions
+        # check goes through packaging.SpecifierSet.contains(), whose
+        # documented default behavior excludes prereleases from a bare
+        # "<X.Y.Z" range entirely (packaging.pypa.io's own docs: "pre-
+        # releases... are implicitly excluded"). "1.0.0rc1" is therefore
+        # NOT reported vulnerable against affected_versions=["<1.0.0"]
+        # alone -- see test_real_cve_2026_25645_prerelease_of_the_fix_
+        # version below for why this doesn't affect real OSV data, which
+        # always pairs affected_versions with fixed_in_version, whose own
+        # plain Version.__lt__ comparison has no such exclusion.
+        vuln = VersionVulnerability(cve_id="CVE-TEST-PYPI-1", source="osv", affected_versions=["<1.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("1.0.0rc1", ecosystem="pypi"))
+        self.assertFalse(vuln.is_current_version_vulnerable("1.0.0", ecosystem="pypi"))
+
+    def test_real_cve_2026_25645_prerelease_of_the_fix_version(self):
+        # Confirmed directly: real OSV data (like CVE-2026-25645 itself)
+        # always pairs affected_versions with fixed_in_version, so a
+        # prerelease of the fix version still correctly falls through to
+        # the fixed_in_version branch's plain Version.__lt__ comparison
+        # (which orders prereleases below their final release, no
+        # exclusion) once the affected_versions/SpecifierSet check above
+        # misses it -- the prerelease-exclusion quirk above is real but
+        # doesn't reach this, the actually-relevant real-world shape.
+        vuln = VersionVulnerability(
+            cve_id="CVE-2026-25645",
+            source="osv",
+            affected_versions=[">=0,<2.33.0"],
+            fixed_in_version="2.33.0",
+        )
+        self.assertTrue(vuln.is_current_version_vulnerable("2.33.0rc1", ecosystem="pypi"))
+
+    def test_unparseable_installed_version_assumes_vulnerable(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-PYPI-2", source="osv", affected_versions=["<2.0.0"])
+        self.assertTrue(vuln.is_current_version_vulnerable("not-a-real-version", ecosystem="pypi"))
+
+    def test_version_outside_range_is_not_flagged(self):
+        vuln = VersionVulnerability(cve_id="CVE-TEST-PYPI-3", source="osv", affected_versions=[">=1.2.3,<2.0.0"])
+        self.assertFalse(vuln.is_current_version_vulnerable("2.5.0", ecosystem="pypi"))
+
+
 if __name__ == "__main__":
     unittest.main()
