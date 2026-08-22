@@ -18,9 +18,12 @@ name: Real Ecosystem Verification
 #
 # ubuntu-latest is used throughout: it has Docker pre-installed (required
 # for deep mode) and, per GitHub's own runner-images documentation, ships
-# Go, a JDK + Maven, the .NET SDK, Ruby + Bundler (a default gem on modern
-# Ruby), and PHP + Composer preinstalled already -- only Rust/Cargo and the
-# Dart SDK need an explicit setup step below.
+# Go, a JDK + Maven, the .NET SDK, and PHP + Composer preinstalled already.
+# Rust/Cargo, the Dart SDK, and Ruby + Bundler all need an explicit setup
+# step below -- confirmed directly Ruby needed one too (a real run failed
+# with "'bundle' was not found on PATH" against plain ubuntu-latest,
+# contradicting this comment's own prior assumption that it shipped
+# preinstalled the way it does on some other CI providers' images).
 on:
   push:
     tags:
@@ -36,9 +39,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # target syntax: confirmed directly against a real failed run
+        # (a real "Invalid URL '1.16.0'" pip error) that pypi is the one
+        # ecosystem using "name==version", not "name@version" -- see
+        # storage/receipts.py's own _install_target_label, which draws
+        # exactly this same distinction.
         include:
           - ecosystem: pypi
-            target: "six@1.16.0"
+            target: "six==1.16.0"
           - ecosystem: npm
             target: "left-pad@1.3.0"
           - ecosystem: cargo
@@ -71,6 +79,17 @@ jobs:
       - name: Set up Dart SDK (pub)
         if: matrix.ecosystem == 'pub'
         uses: dart-lang/setup-dart@v1
+
+      - name: Set up Ruby + Bundler (rubygems)
+        # Confirmed directly against a real failed run: ubuntu-latest
+        # does NOT ship bundle/Ruby on PATH the way it does Go/a JDK+
+        # Maven/the .NET SDK/PHP+Composer -- this module docstring's
+        # earlier assumption to the contrary was wrong.
+        if: matrix.ecosystem == 'rubygems'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
 
       - name: Install Trivy
         run: |

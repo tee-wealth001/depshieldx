@@ -1,6 +1,8 @@
 import io
 import json
 import os
+import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -45,6 +47,7 @@ from depshieldx.sandbox import (
     _extract_report,
     _rezip_composer_artifact_with_version,
     _run_command,
+    _sandbox_bundle_mkdtemp,
     _sandbox_cache_fingerprint,
     cleanup_download_bundle,
     prepare_cargo_download_bundle,
@@ -62,6 +65,24 @@ from depshieldx.security.sandbox.sandbox_wrapper import EvidenceCollector, _crea
 
 
 class SandboxHelpersTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits are not meaningful on Windows")
+    def test_sandbox_bundle_mkdtemp_is_world_readable(self):
+        # Regression test for a real bug: plain tempfile.mkdtemp() creates
+        # a 0700 (owner-only) directory, but every prepare_*_download_
+        # bundle bind-mounts this directory read-only into the sandbox
+        # container, which always runs as a different, fixed, non-root
+        # UID -- confirmed directly this made every ecosystem's deep mode
+        # fail with a real PermissionError on a native Linux Docker host
+        # (this project's own real ecosystem CI matrix, ubuntu-latest),
+        # despite passing on Docker Desktop (Windows/macOS), whose
+        # bind-mount layer doesn't enforce this the same way.
+        path = _sandbox_bundle_mkdtemp()
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            self.assertEqual(mode, 0o755)
+        finally:
+            shutil.rmtree(path, ignore_errors=True)
+
     def test_extract_report_reads_prefixed_json_line(self):
         output = "\n".join(
             [
