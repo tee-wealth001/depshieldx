@@ -110,7 +110,7 @@ a = Analysis(
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[os.path.join(REPO_ROOT, "packaging", "rthook_reset_dll_directory.py")],
     excludes=[],
     noarchive=False,
 )
