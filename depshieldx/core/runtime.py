@@ -8,25 +8,31 @@ against it. Every host-side subprocess call that needs a real interpreter or
 a bundled script file must go through here rather than trusting
 sys.executable directly. See findings.md #4 for how this was discovered.
 
-Confirmed directly against a real Windows release binary: PyInstaller's
-onefile bootloader prepends its own extraction directory (sys._MEIPASS) to
-the *process's* PATH environment variable, so its own bundled DLLs resolve
-correctly for depshieldx's own imports. That PATH entry is otherwise
-invisible -- it isn't in the source-code, non-frozen environment at all --
-but subprocess.run() inherits os.environ by default, so it leaks unchanged
-into every child process too. A real external toolchain that happens to
-dynamically link against a same-named DLL depshieldx also bundles (PHP's
-own VCRUNTIME140.dll dependency, in the confirmed case) can then resolve
-the *frozen binary's own bundled copy* instead of its real one, and fail
-outright on a version mismatch that never happens running from source or
-against any other toolchain that doesn't hit the same collision. Every
-subprocess call to an external toolchain (composer, npm, cargo, go, mvn,
-dotnet, dart, bundle, docker, trivy, pip, ...) needs to pass
-subprocess_env() explicitly -- os.environ itself is deliberately left
-untouched, since the frozen process's own still-pending lazy imports (e.g.
-cryptography/sigstore's compiled extensions, not all loaded at startup)
-still need the real, unmodified PATH with _MEIPASS present to resolve their
-own bundled DLLs correctly.
+subprocess_env() below was written to fix a real Windows packaging bug: a
+real external toolchain subprocess (confirmed with composer -> php.exe)
+resolving depshieldx's own bundled vcruntime140.dll instead of a
+compatible system one, and failing outright on the version mismatch. The
+original theory -- that PyInstaller's onefile bootloader prepends
+sys._MEIPASS to the process's own PATH environment variable, inherited
+unchanged by subprocess.run()'s default os.environ inheritance -- turned
+out to be wrong, confirmed directly two ways: a real frozen process's own
+os.environ['PATH'] never contains _MEIPASS at all, and handing
+subprocess.run() a completely empty PATH does not fix the bug either. The
+real mechanism (see packaging/rthook_reset_dll_directory.py's own
+docstring for the full investigation) is a process-wide DLL search
+directory the bootloader sets via the Win32 SetDllDirectory API, which is
+not PATH-based and is not something a subprocess call's own env=
+argument can affect at all -- the actual fix is that runtime hook calling
+SetDllDirectoryW(None) once, early, before any of depshieldx's own code
+runs.
+
+subprocess_env() itself is kept below as harmless, no-op-in-practice
+defense in depth for any other, genuinely PATH-based leak (confirmed
+directly it strips nothing in the one real case investigated, since
+_MEIPASS was never on PATH to begin with) -- every subprocess call to an
+external toolchain (composer, npm, cargo, go, mvn, dotnet, dart, bundle,
+docker, trivy, pip, ...) still passes it explicitly for that reason, not
+because it's confirmed to matter.
 """
 
 import os
