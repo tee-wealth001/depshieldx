@@ -39,11 +39,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # target syntax: confirmed directly against a real failed run
-        # (a real "Invalid URL '1.16.0'" pip error) that pypi is the one
-        # ecosystem using "name==version", not "name@version" -- see
-        # storage/receipts.py's own _install_target_label, which draws
-        # exactly this same distinction.
+        # target syntax: confirmed directly against real failed runs that
+        # this is not one uniform convention. pypi uses "name==version"
+        # (a real "Invalid URL '1.16.0'" pip error confirmed this,
+        # matching storage/receipts.py's own _install_target_label).
+        # Maven uses its own native "groupId:artifactId:version" coordinate
+        # notation, not "@" (a real "could not determine the latest
+        # version... pass an explicit groupId:artifactId:version" error
+        # from ecosystems/maven/ecosystem.py confirmed this). Every other
+        # ecosystem here uses "name@version".
         include:
           - ecosystem: pypi
             target: "six==1.16.0"
@@ -54,7 +58,7 @@ jobs:
           - ecosystem: go
             target: "github.com/google/uuid@v1.6.0"
           - ecosystem: maven
-            target: "org.apache.commons:commons-lang3@3.14.0"
+            target: "org.apache.commons:commons-lang3:3.14.0"
           - ecosystem: nuget
             target: "Newtonsoft.Json@13.0.3"
           - ecosystem: pub
