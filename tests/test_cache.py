@@ -1,11 +1,24 @@
+import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from depshieldx.cache import CACHE_SCHEMA_VERSION, fingerprint_artifacts, load_cache_entry, store_cache_entry
+from depshieldx.cache import (
+    CACHE_SCHEMA_VERSION,
+    fingerprint_artifacts,
+    load_cache_entry,
+    prune_bundle_cache,
+    prune_provenance_cache,
+    store_cache_entry,
+)
 from depshieldx.sandbox import DownloadBundle
+
+
+def _iso(age: timedelta) -> str:
+    return (datetime.now(timezone.utc) - age).isoformat()
 
 
 class CacheTests(unittest.TestCase):
@@ -62,3 +75,92 @@ class CacheTests(unittest.TestCase):
                 loaded = load_cache_entry("stale-fingerprint")
 
             self.assertIsNone(loaded)
+
+
+class PruneBundleCacheTests(unittest.TestCase):
+    def _make_entry(self, cache_dir: str, name: str, cached_at: str) -> None:
+        entry_dir = Path(cache_dir) / name
+        entry_dir.mkdir(parents=True, exist_ok=True)
+        (entry_dir / "depshieldx-lock.txt").write_text("flask==3.1.3\n")
+        (entry_dir / "metadata.json").write_text(json.dumps({"cache_schema_version": CACHE_SCHEMA_VERSION, "cached_at": cached_at}))
+
+    def test_removes_only_entries_older_than_max_age(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            self._make_entry(cache_dir, "old-entry", _iso(timedelta(days=40)))
+            self._make_entry(cache_dir, "fresh-entry", _iso(timedelta(days=1)))
+
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}):
+                removed = prune_bundle_cache(max_age=timedelta(days=30))
+
+            self.assertEqual(removed, ["old-entry"])
+            self.assertFalse((Path(cache_dir) / "old-entry").exists())
+            self.assertTrue((Path(cache_dir) / "fresh-entry").exists())
+
+    def test_never_touches_receipts_provenance_keys_or_routing_dirs(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            for reserved in ("receipts", "provenance", "keys", "routing"):
+                (Path(cache_dir) / reserved).mkdir()
+
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}):
+                removed = prune_bundle_cache(max_age=timedelta(days=0))
+
+            self.assertEqual(removed, [])
+            for reserved in ("receipts", "provenance", "keys", "routing"):
+                self.assertTrue((Path(cache_dir) / reserved).exists())
+
+    def test_leaves_entries_with_missing_or_malformed_metadata_alone(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            no_metadata_dir = Path(cache_dir) / "no-metadata"
+            no_metadata_dir.mkdir()
+            malformed_dir = Path(cache_dir) / "malformed-metadata"
+            malformed_dir.mkdir()
+            (malformed_dir / "metadata.json").write_text("not valid json{{{")
+
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}):
+                removed = prune_bundle_cache(max_age=timedelta(days=0))
+
+            self.assertEqual(removed, [])
+            self.assertTrue(no_metadata_dir.exists())
+            self.assertTrue(malformed_dir.exists())
+
+    def test_no_cache_root_returns_empty_list(self):
+        with tempfile.TemporaryDirectory() as parent_dir:
+            missing_dir = str(Path(parent_dir) / "does-not-exist")
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": missing_dir}):
+                self.assertEqual(prune_bundle_cache(), [])
+
+
+class PruneProvenanceCacheTests(unittest.TestCase):
+    def _make_provenance_file(self, cache_dir: str, key: str, cached_at: str) -> None:
+        provenance_dir = Path(cache_dir) / "provenance"
+        provenance_dir.mkdir(parents=True, exist_ok=True)
+        (provenance_dir / f"{key}.json").write_text(json.dumps({"cache_version": 3, "cached_at": cached_at, "result": {}}))
+
+    def test_removes_only_entries_past_the_24h_ttl(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            self._make_provenance_file(cache_dir, "stale-key", _iso(timedelta(hours=25)))
+            self._make_provenance_file(cache_dir, "fresh-key", _iso(timedelta(hours=1)))
+
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}):
+                removed = prune_provenance_cache()
+
+            self.assertEqual(removed, ["stale-key"])
+            self.assertFalse((Path(cache_dir) / "provenance" / "stale-key.json").exists())
+            self.assertTrue((Path(cache_dir) / "provenance" / "fresh-key.json").exists())
+
+    def test_leaves_malformed_entries_alone(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            provenance_dir = Path(cache_dir) / "provenance"
+            provenance_dir.mkdir(parents=True)
+            (provenance_dir / "malformed.json").write_text("not valid json{{{")
+
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}):
+                removed = prune_provenance_cache()
+
+            self.assertEqual(removed, [])
+            self.assertTrue((provenance_dir / "malformed.json").exists())
+
+    def test_no_provenance_dir_returns_empty_list(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            with patch.dict(os.environ, {"DEPSHIELDX_CACHE_DIR": cache_dir}):
+                self.assertEqual(prune_provenance_cache(), [])

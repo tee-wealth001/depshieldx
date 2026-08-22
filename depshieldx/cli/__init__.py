@@ -11,7 +11,7 @@ package __init__.py.
 """
 
 from .app import cli
-from .commands import doctor, install, receipts, routing, scan, ui, uninstall
+from .commands import cache, doctor, install, receipts, routing, scan, ui, uninstall
 
 install.register(cli)
 scan.register(cli)
@@ -20,5 +20,6 @@ routing.register(cli)
 receipts.register(cli)
 ui.register(cli)
 doctor.register(cli)
+cache.register(cli)
 
 __all__ = ["cli"]
