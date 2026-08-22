@@ -535,13 +535,43 @@ def download_packages_local(install_targets: list[str], temp_dir: str, verbose: 
     )
 
 
+def _sandbox_bundle_mkdtemp(prefix: str = "depshieldx_") -> str:
+    """tempfile.mkdtemp() creates a directory readable/writable/
+    searchable only by the creating user (0700 on POSIX -- confirmed
+    directly against Python's own documentation and a real GitHub
+    Actions ubuntu-latest run reproducing the resulting bug end to end).
+    Every prepare_*_download_bundle below bind-mounts its own temp_dir
+    read-only into the sandbox container (docker run ... -v
+    {temp_dir}:/tmp/packages:ro), which always runs as a fixed, non-root
+    UID (SANDBOX_USER) that is never the same UID that created the
+    directory -- a plain 0700 mkdtemp() makes the mount unreadable to
+    the very container process that needs to read it, surfacing as a
+    real PermissionError deep inside the sandboxed install (confirmed
+    directly: npm/go/nuget/composer/pub/cargo all failed this exact way
+    on a real ubuntu-latest run). 0o755 (world-readable/searchable,
+    still owner-write-only) fixes this while keeping the directory
+    closed to writes from anyone but the creating user.
+
+    Confirmed directly this bug does NOT reproduce against Docker
+    Desktop (Windows/macOS): its bind-mount layer doesn't enforce
+    host-side POSIX permissions against the container's UID the way a
+    native Linux Docker daemon does, which is exactly why extensive
+    manual verification against a real Windows Docker Desktop install
+    earlier in this project's history never caught it -- only surfaced
+    once this project's own real ecosystem CI matrix ran against a real
+    native-Linux runner."""
+    path = tempfile.mkdtemp(prefix=prefix)
+    os.chmod(path, 0o755)
+    return path
+
+
 def prepare_download_bundle(
     install_targets: list[str],
     resolved_versions: Optional[dict[str, str]] = None,
     verbose: bool = False,
     download_via_host: bool = False,
 ) -> DownloadBundle:
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         if download_via_host:
             download_packages_local(install_targets, temp_dir, verbose=verbose)
@@ -586,7 +616,7 @@ def prepare_npm_download_bundle(ecosystem, resolved_versions: dict[str, str]) ->
     still written (as a plain name@version list, not a real npm format) so
     the shared DownloadBundle/caching code has something to round-trip.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         resolution = ResolutionResult(
             packages=list(resolved_versions.keys()),
@@ -639,7 +669,7 @@ def prepare_cargo_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
     subpath, so run_sandbox() doesn't need a new DownloadBundle field to
     find it.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         resolution = ResolutionResult(
             packages=list(resolved_versions.keys()),
@@ -730,7 +760,7 @@ def prepare_go_download_bundle(ecosystem, resolved_versions: dict[str, str]) -> 
     zip-extraction branch in artifact_analysis.py needs no Go-specific
     code, only ".go" added to TEXT_EXTENSIONS.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         proxy_dir = Path(temp_dir) / "goproxy"
         go_sum_lines: List[str] = []
@@ -859,7 +889,7 @@ def prepare_maven_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
     zip-extraction branch in artifact_analysis.py only needs ".jar" added
     to the top-level archive-suffix check, no new extraction code.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         m2_repo = Path(temp_dir) / "m2-repo"
         fetched_metadata_poms: set[tuple[str, str, str]] = set()
@@ -1020,7 +1050,7 @@ def prepare_nuget_download_bundle(ecosystem, resolved_versions: dict[str, str]) 
     already recognizes ".dll" for the unrelated reason Windows PE
     binaries already needed it.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         resolution = ResolutionResult(
             packages=list(resolved_versions.keys()),
@@ -1100,7 +1130,7 @@ def prepare_pub_download_bundle(ecosystem, resolved_versions: dict[str, str]) ->
     lock-file requirement was: Trivy's Pub scanner reads pubspec.lock
     natively (confirmed directly: "[pub] Detecting vulnerabilities...").
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         resolution = ResolutionResult(
             packages=list(resolved_versions.keys()),
@@ -1196,7 +1226,7 @@ def prepare_rubygems_download_bundle(ecosystem, resolved_versions: dict[str, str
     exactly the isolation this project's sandbox already exists for,
     unlike the same code running unguarded on the host.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         resolution = ResolutionResult(
             packages=list(resolved_versions.keys()),
@@ -1324,7 +1354,7 @@ def prepare_composer_download_bundle(ecosystem, resolved_versions: dict[str, str
     isolated sandbox container itself (sandbox_wrapper_composer.py), to
     prove genuine offline installability against the fetched artifacts.
     """
-    temp_dir = tempfile.mkdtemp(prefix="depshieldx_")
+    temp_dir = _sandbox_bundle_mkdtemp()
     try:
         resolution = ResolutionResult(
             packages=list(resolved_versions.keys()),
@@ -1586,7 +1616,19 @@ def run_sandbox(
             # `docker cp` could read it -- the previous docker-cp-after-exit
             # approach was silently scanning nothing on every deep-mode run,
             # for both ecosystems.
+            # Bind-mounted :rw (not :ro like the bundle dirs
+            # _sandbox_bundle_mkdtemp handles above) -- the sandbox
+            # container's own fixed, non-root UID needs to *write*
+            # real install output here, not just read it, so this needs
+            # world-writable (0o777), not _sandbox_bundle_mkdtemp's
+            # world-readable-only 0o755. Same underlying mkdtemp()-
+            # defaults-to-0700 issue either way -- confirmed directly
+            # this is not yet reproduced as a real PermissionError here
+            # the way the read-only bundle dirs were, but the identical
+            # UID mismatch applies, so fixed proactively rather than
+            # waiting for it to surface the same way.
             host_install_dir = tempfile.mkdtemp(prefix="depshieldx_sandbox_install_")
+            os.chmod(host_install_dir, 0o777)
             # Base directory Trivy scans after the container exits. Defaults
             # to the bind-mounted install dir above; cargo overrides this
             # below to point at the host-side vendor directory instead, since
