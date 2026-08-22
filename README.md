@@ -25,6 +25,22 @@ python3.11 -m pip install depshieldx
 
 Each [GitHub Release](https://github.com/tee-wealth001/depshieldx/releases) also includes a standalone binary per platform (Windows x64, macOS x64/arm64, Linux x64) built with PyInstaller. Download it, put it on `PATH`, and run it directly -- no `pip install` and no separate Python interpreter needed just to launch `depshieldx`.
 
+**macOS / Linux** -- move the downloaded binary somewhere already on `PATH` and make it executable:
+
+```bash
+chmod +x depshieldx-macos-arm64   # or depshieldx-linux-x64, depshieldx-macos-x64
+sudo mv depshieldx-macos-arm64 /usr/local/bin/depshieldx
+depshieldx --help
+```
+
+**Windows** -- rename the download to `depshieldx.exe`, then add its folder to `PATH` (one time only). In PowerShell, replace `C:\tools\depshieldx` below with wherever you put the file:
+
+```powershell
+[Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\tools\depshieldx", "User")
+```
+
+Close and reopen your terminal for the change to take effect, then run `depshieldx --help` to confirm it's found. Without a GUI/PowerShell, the same thing is done through *Settings -> System -> About -> Advanced system settings -> Environment Variables*, editing the `Path` entry under "User variables" to add the folder, then reopening any open terminal windows.
+
 That said, `depshieldx` doesn't reimplement `pip` or `npm` -- it wraps the real tools for actually resolving and installing packages, in either distribution:
 
 - Using it against **PyPI** packages still requires a real Python + `pip` on the host, standalone binary or not. If the binary can't find one on `PATH`, it fails with a clear error rather than doing something unsafe.
@@ -475,12 +491,14 @@ Main commands:
 - `depshieldx scan`
 - `depshieldx uninstall`
 - `depshieldx ui`
+- `depshieldx doctor`
 - `depshieldx routing status`
 - `depshieldx routing enable`
 - `depshieldx routing disable`
 - `depshieldx receipts list`
 - `depshieldx receipts verify <path>`
 - `depshieldx receipts delete`
+- `depshieldx cache clean`
 
 Get help at any level:
 
@@ -490,12 +508,18 @@ depshieldx install --help
 depshieldx scan --help
 depshieldx uninstall --help
 depshieldx ui --help
+depshieldx doctor --help
 depshieldx receipts --help
+depshieldx cache --help
 ```
+
+`depshieldx doctor` checks every prerequisite this project performs piecemeal elsewhere -- the Python/pip version gate, Docker daemon availability, host Trivy availability, and each ecosystem's own toolchain on `PATH` -- in one pass, so a missing toolchain shows up before an install/scan run rather than mid-run.
+
+`depshieldx cache clean` reclaims disk space from the local deep-scan bundle and provenance caches; see [Local UI](#local-ui) below for what's cached and where.
 
 ## Local UI
 
-`depshieldx ui` opens a local, read-only browser view over cached receipts and related cache entries.
+`depshieldx ui` opens a local browser view over cached receipts and related cache entries -- mostly read-only, with one exception: each receipt row has a delete button to remove that one receipt.
 
 - binds to `127.0.0.1` only
 - uses port `0` by default so the OS can choose a free port
@@ -943,13 +967,7 @@ depshieldx ui
 - deep mode is slower than fast mode
 - npm's, Cargo's, Go's, Maven's, NuGet's, Pub's, RubyGems', and Composer's behavioral tracing (Docker deep mode) all observe syscalls via `strace` rather than actively blocking them in real time the way PyPI's in-process guards do; filesystem/network isolation is still enforced by the container itself either way
 - the safety guarantees depend in part on the local Python and `pip` versions
-- Cargo resolution, install, and deep mode all shell out to a local `cargo` on `PATH`; there is no preflight check for this, so a missing Rust toolchain only surfaces later, as a resolution failure
-- Go resolution, install, and deep mode all shell out to a local `go` on `PATH` the same way; there is no preflight check for this either, so a missing Go toolchain only surfaces later, as a resolution failure
-- Maven resolution, install, and deep mode all shell out to a local `mvn` on `PATH` the same way; there is no preflight check for this either, so a missing Java/Maven toolchain only surfaces later, as a resolution failure
-- NuGet resolution, install, and deep mode all shell out to a local `dotnet` on `PATH` the same way; there is no preflight check for this either, so a missing .NET SDK only surfaces later, as a resolution failure
-- Pub resolution, install, and deep mode all shell out to a local `dart` on `PATH` the same way; there is no preflight check for this either, so a missing Dart SDK only surfaces later, as a resolution failure
-- RubyGems resolution, install, and deep mode all shell out to a local `bundle` on `PATH` the same way; there is no preflight check for this either, so a missing Ruby/Bundler install only surfaces later, as a resolution failure
-- Composer resolution, install, and deep mode all shell out to a local `composer` on `PATH` the same way; there is no preflight check for this either, so a missing PHP/Composer install only surfaces later, as a resolution failure
+- Cargo, Go, Maven, NuGet, Pub, RubyGems, and Composer resolution/install/deep mode all shell out to a local toolchain binary on `PATH` (`cargo`, `go`, `mvn`, `dotnet`, `dart`, `bundle`, `composer` respectively); `install`/`scan` themselves still don't preflight-check any of these before attempting resolution, so a missing toolchain surfaces as a resolution failure mid-run. Run `depshieldx doctor` first to check every ecosystem's toolchain (plus Docker/Trivy and the Python/pip prerequisite every operation needs) up front instead.
 - `Cargo.lock` parsing keeps only the newest resolved version when the same crate appears pinned at two different major versions; the older entry is silently dropped -- `packages.lock.json` parsing follows the same "keep the newest" rule when a package disagrees across target frameworks
 - not every Go module resolved for deep mode has an importable root package (some are subpackage-only, e.g. `golang.org/x/crypto`); those are skipped from behavioral tracing rather than failing the whole sandboxed build, and listed in the full JSON report's `skipped_modules`
 - some packages publish no PyPI or npm attestations at all; that is usually informational, not a red flag -- Cargo/crates.io and Go modules have no per-package attestation infrastructure at all, so this is categorically true for every crate/module, not just some; Maven has real Sigstore support but it's still new and opt-in, so most Maven artifacts today are in the same boat; NuGet, Pub, RubyGems, and Composer have no default Sigstore equivalent at all
