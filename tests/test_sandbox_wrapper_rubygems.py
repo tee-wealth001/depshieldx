@@ -1,12 +1,17 @@
+import subprocess
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from depshieldx.security.sandbox.sandbox_wrapper_rubygems import (
     BUNDLE_MOUNT_PREFIX,
     WORK_DIR,
     _build_verdicts,
     _classify_write_path,
+    _current_gem_platform,
     _parse_strace_log,
+    _pin_lockfile_to_current_platform,
 )
 
 
@@ -94,6 +99,71 @@ class ParseStraceLogTests(unittest.TestCase):
         evidence = _parse_strace_log(log_path)
         self.assertEqual(evidence["write_count"], 0)
         self.assertEqual(evidence["syscall_counts"], {"filesystem_mutation": 0, "process_exec": 0, "network": 0})
+
+
+class CurrentGemPlatformTests(unittest.TestCase):
+    def test_returns_stripped_stdout_from_ruby(self):
+        # Confirmed directly against a real ruby:3 container: Gem::
+        # Platform.local.to_s is the exact string `bundle install`
+        # itself checks the lockfile's own PLATFORMS section against.
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="x86_64-linux\n", stderr="")
+        with patch(
+            "depshieldx.security.sandbox.sandbox_wrapper_rubygems.subprocess.run",
+            return_value=fake_result,
+        ) as mock_run:
+            platform = _current_gem_platform()
+        self.assertEqual(platform, "x86_64-linux")
+        mock_run.assert_called_once_with(
+            ["ruby", "-e", "puts Gem::Platform.local.to_s"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+
+class PinLockfileToCurrentPlatformTests(unittest.TestCase):
+    def _write_lockfile(self, content: str) -> Path:
+        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".lock", delete=False)
+        handle.write(content)
+        handle.close()
+        return Path(handle.name)
+
+    def test_replaces_ruby_placeholder_with_real_platform(self):
+        # This exact placeholder text is write_gemfile_lock's own
+        # emitted output (ecosystems/rubygems/lockfiles.py) -- confirmed
+        # directly a real `bundle install --local` run against it
+        # (unrewritten) triggers a blocked network re-resolve inside
+        # this project's own sandbox image.
+        lockfile_path = self._write_lockfile(
+            "GEM\n  remote: https://rubygems.org/\n  specs:\n    json (2.21.2)\n\n"
+            "PLATFORMS\n  ruby\n\nDEPENDENCIES\n  json (= 2.21.2)\n"
+        )
+        with patch(
+            "depshieldx.security.sandbox.sandbox_wrapper_rubygems._current_gem_platform",
+            return_value="x86_64-linux",
+        ):
+            _pin_lockfile_to_current_platform(lockfile_path)
+        rewritten = lockfile_path.read_text(encoding="utf-8")
+        self.assertIn("PLATFORMS\n  x86_64-linux\n", rewritten)
+        self.assertNotIn("PLATFORMS\n  ruby\n", rewritten)
+
+    def test_leaves_gem_spec_and_dependency_entries_untouched(self):
+        # Confirmed directly a real `bundle lock` run keeps spec entries
+        # plain/unsuffixed for a platform-agnostic gem regardless of
+        # which specific platform PLATFORMS itself names -- only the
+        # PLATFORMS section's own body should change here.
+        lockfile_path = self._write_lockfile(
+            "GEM\n  remote: https://rubygems.org/\n  specs:\n    json (2.21.2)\n\n"
+            "PLATFORMS\n  ruby\n\nDEPENDENCIES\n  json (= 2.21.2)\n"
+        )
+        with patch(
+            "depshieldx.security.sandbox.sandbox_wrapper_rubygems._current_gem_platform",
+            return_value="x86_64-linux",
+        ):
+            _pin_lockfile_to_current_platform(lockfile_path)
+        rewritten = lockfile_path.read_text(encoding="utf-8")
+        self.assertIn("    json (2.21.2)\n", rewritten)
+        self.assertIn("  json (= 2.21.2)\n", rewritten)
 
 
 class BuildVerdictsTests(unittest.TestCase):

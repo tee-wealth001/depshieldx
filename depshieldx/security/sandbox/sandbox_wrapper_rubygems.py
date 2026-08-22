@@ -28,6 +28,20 @@ extension gem (json) made zero connect() attempts of any kind under this
 project's full isolation posture -- no analogous toolchain-level
 telemetry/verification noise to work around here.
 
+A separate, later-discovered edge case (also confirmed directly): that
+zero-network-attempts finding depended on the lockfile's own PLATFORMS
+section already matching the container's real running platform. A
+lockfile listing only write_gemfile_lock's own placeholder "ruby"
+platform is NOT accepted by this Bundler version as equivalent to an
+exact match -- `bundle install --local` decides the lockfile is missing
+the current platform and triggers a real re-resolve against the
+registry, which this sandbox's own --network none isolation then
+blocks, producing a real (if misleading) network_attempt_blocked
+verdict for a completely benign install. _pin_lockfile_to_current_
+platform below (called from _prepare_work_env) is the fix: it rewrites
+PLATFORMS to the real Gem::Platform.local queried fresh from inside
+this exact container before `bundle install --local` ever runs.
+
 Also confirmed directly this produces a real, large, legitimate
 subprocess tree for a native-extension gem -- ruby -> gcc -> cc1/as/
 collect2/ld, plus make -- none of which is itself suspicious (this is
@@ -126,11 +140,56 @@ def _is_remote_connect(args_text: str) -> bool:
     return bool(AF_INET_PATTERN.search(args_text))
 
 
+def _current_gem_platform() -> str:
+    """The exact platform string `bundle install` itself requires the
+    lockfile's own PLATFORMS section to already list -- confirmed
+    directly against this real image that a lockfile listing only the
+    generic "ruby" placeholder (write_gemfile_lock's own emitted value)
+    does NOT satisfy Bundler's "lockfile has the current platform"
+    check, since Gem::Platform.local here is "x86_64-linux", never
+    literally "ruby". That mismatch sends `bundle install --local` down
+    a real re-resolve path that reaches out to the registry over the
+    network -- exactly what this sandbox's own --network none isolation
+    then blocks, surfacing as a misleading "suspicious network attempt"
+    verdict for a completely benign install. Queried fresh from inside
+    this exact container rather than guessed/hardcoded host-side, so it
+    stays correct regardless of the sandbox image's own architecture."""
+    result = subprocess.run(
+        ["ruby", "-e", "puts Gem::Platform.local.to_s"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _pin_lockfile_to_current_platform(lockfile_path: Path) -> None:
+    """Replaces write_gemfile_lock's own placeholder "PLATFORMS: ruby"
+    with the real current platform (see _current_gem_platform) --
+    confirmed directly end to end this matches what a genuine `bundle
+    lock` run itself produces (PLATFORMS listing only the specific
+    current platform, never "ruby" alongside it) and is what a real
+    `bundle install --local` run needs to skip the network re-resolve
+    entirely; confirmed directly that *adding* the specific platform
+    alongside "ruby" instead of replacing it breaks local gem lookup
+    with Bundler::GemNotFound. Every resolved spec entry itself is left
+    untouched -- depshieldx never resolves a platform-specific gem
+    variant to begin with (see lockfiles.py's own module docstring), so
+    a plain, unsuffixed spec entry is already correct for any platform.
+    Only this container-local copy is rewritten, never the host-side
+    bundle directory (mounted read-only, and irrelevant to Trivy's own
+    scan, which only reads gem name/version pairs)."""
+    text = lockfile_path.read_text(encoding="utf-8")
+    text = text.replace("PLATFORMS\n  ruby\n", f"PLATFORMS\n  {_current_gem_platform()}\n")
+    lockfile_path.write_text(text, encoding="utf-8")
+
+
 def _prepare_work_env(bundle_dir: Path) -> dict:
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copytree(bundle_dir / "vendor", WORK_DIR / "vendor")
     shutil.copy2(bundle_dir / "Gemfile", WORK_DIR / "Gemfile")
     shutil.copy2(bundle_dir / "Gemfile.lock", WORK_DIR / "Gemfile.lock")
+    _pin_lockfile_to_current_platform(WORK_DIR / "Gemfile.lock")
 
     env = dict(os.environ)
     # $HOME needs to be writable too -- SANDBOX_USER's real default HOME
