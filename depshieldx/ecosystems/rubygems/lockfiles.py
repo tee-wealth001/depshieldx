@@ -162,15 +162,23 @@ def write_gemfile_lock(resolved_versions: dict[str, str]) -> str:
     directly this round-trips cleanly through a real `bundle install
     --local` (used only inside the fully-isolated sandbox container,
     never on the host) with "Found no changes, using resolution from the
-    lockfile". "PLATFORMS: ruby" (rather than the sandbox container's or
-    the host's own specific platform triple) is used deliberately --
-    confirmed directly this is accepted the same as an exact platform
-    match, and is the one platform value guaranteed correct regardless
-    of which architecture the sandbox container itself ends up running
-    on. "BUNDLED WITH" is omitted entirely -- confirmed directly a real
-    `bundle install --local` run against a lockfile missing that section
-    works identically to one with a (here, inevitably guessed and
-    possibly wrong) version pinned."""
+    lockfile", *provided* PLATFORMS lists the real current platform.
+    "PLATFORMS: ruby" is written here as a placeholder only -- this
+    function has no way to know the sandbox container's own platform
+    from the host side, and a prior attempt to rely on "ruby" alone
+    turned out to be wrong: confirmed directly this Bundler version does
+    NOT accept it as equivalent to an exact platform match, and instead
+    triggers a real network re-resolve that the sandbox's own --network
+    none isolation then blocks (see sandbox_wrapper_rubygems.py's module
+    docstring for the full investigation). The real fix lives there:
+    sandbox_wrapper_rubygems.py's _pin_lockfile_to_current_platform
+    rewrites this placeholder to the real Gem::Platform.local, queried
+    fresh from inside the exact container that will run `bundle install
+    --local`, before install ever runs. "BUNDLED WITH" is omitted
+    entirely -- confirmed directly a real `bundle install --local` run
+    against a lockfile missing that section works identically to one
+    with a (here, inevitably guessed and possibly wrong) version
+    pinned."""
     specs = "\n".join(f"    {name} ({version})" for name, version in sorted(resolved_versions.items()))
     dependencies = "\n".join(f"  {name} (= {version})" for name, version in sorted(resolved_versions.items()))
     return (
