@@ -4,7 +4,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from depshieldx.receipts import ReceiptUnavailableError, _signing_key_path, delete_receipts, list_receipts, verify_receipt, write_receipt
+from depshieldx.receipts import (
+    ReceiptUnavailableError,
+    _signing_key_path,
+    delete_receipt,
+    delete_receipts,
+    list_receipts,
+    verify_receipt,
+    write_receipt,
+)
 
 
 class ReceiptTests(unittest.TestCase):
@@ -146,6 +154,80 @@ class ReceiptTests(unittest.TestCase):
 
         self.assertEqual(deleted, 1)
         self.assertEqual(listed, [])
+
+    def test_delete_receipt_removes_only_the_matching_one(self):
+        flask_report = {
+            "package": "flask",
+            "mode": "fast",
+            "requested_at": "2026-03-26T12:00:00+00:00",
+            "resolution": {
+                "install_target": "Flask==3.1.3",
+                "requested_targets": ["flask"],
+                "resolved_versions": {"Flask": "3.1.3"},
+                "packages": ["Flask"],
+                "source_type": "package",
+                "resolution_succeeded": True,
+            },
+            "scan": {"block": False, "warnings": [], "infos": []},
+            "provenance": {"block": False, "warnings": [], "infos": [], "details": []},
+            "install": {"attempted": True, "success": True, "target": "Flask==3.1.3"},
+        }
+        requests_report = {
+            "package": "requests",
+            "mode": "fast",
+            "requested_at": "2026-03-26T12:00:00+00:00",
+            "resolution": {
+                "install_target": "requests==2.33.1",
+                "requested_targets": ["requests"],
+                "resolved_versions": {"requests": "2.33.1"},
+                "packages": ["requests"],
+                "source_type": "package",
+                "resolution_succeeded": True,
+            },
+            "scan": {"block": False, "warnings": [], "infos": []},
+            "provenance": {"block": False, "warnings": [], "infos": [], "details": []},
+            "install": {"attempted": True, "success": True, "target": "requests==2.33.1"},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
+                flask_written = write_receipt(flask_report)
+                write_receipt(requests_report)
+                deleted = delete_receipt(flask_written["receipt_id"])
+                listed = list_receipts()
+
+        self.assertTrue(deleted)
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["package"], "requests")
+
+    def test_delete_receipt_returns_false_for_unknown_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
+                deleted = delete_receipt("0123456789abcdef")
+
+        self.assertFalse(deleted)
+
+    def test_delete_receipt_rejects_malformed_ids_without_touching_disk(self):
+        # Confirmed directly this matters: receipt_id comes straight from
+        # an HTTP request path segment (server.py's do_DELETE) -- a
+        # traversal-shaped id must be rejected by shape before it ever
+        # reaches glob(), not merely fail to match a real file by luck.
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
+                for malformed in ("../../etc/passwd", "", "not-hex-zzzzzzzz", "toolongtobearealreceiptid00"):
+                    self.assertFalse(delete_receipt(malformed), msg=f"expected rejection for {malformed!r}")
 
     @patch("depshieldx.receipts._receipts_root_candidates", return_value=[])
     def test_list_receipts_returns_empty_when_store_is_unavailable(self, _mock_candidates):

@@ -1,12 +1,16 @@
 import json
 import os
+import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 from depshieldx.presentation.web.payloads import build_ui_payload
-from depshieldx.presentation.web.server import serve_ui
+from depshieldx.presentation.web.server import create_ui_server, serve_ui
+from depshieldx.receipts import list_receipts, write_receipt
 
 
 class UiTests(unittest.TestCase):
@@ -118,3 +122,97 @@ class UiTests(unittest.TestCase):
         self.assertIn("depshieldx UI running at http://127.0.0.1:43123/", messages[0])
         mock_browser_open.assert_called_once_with("http://127.0.0.1:43123/")
         server.server_close.assert_called_once()
+
+
+class ReceiptDeleteEndpointTests(unittest.TestCase):
+    """Exercises DELETE /api/receipts/<id> through a real ephemeral
+    ThreadingHTTPServer (not a mocked handler) -- the only way to cover
+    do_DELETE's actual request-parsing/response-writing behavior, the
+    same way a real browser fetch() would hit it."""
+
+    def _start_server(self):
+        server = create_ui_server(port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        # addCleanup runs LIFO -- registered in the order that stops
+        # serve_forever's loop (shutdown) before closing the socket out
+        # from under it (server_close), confirmed directly the reverse
+        # order races serve_forever's select() against server_close() on
+        # Windows ("An operation was attempted on something that is not
+        # a socket").
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        host, port = server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def test_delete_removes_existing_receipt_and_returns_200(self):
+        report = {
+            "package": "flask",
+            "mode": "fast",
+            "requested_at": "2026-03-26T12:00:00+00:00",
+            "resolution": {
+                "install_target": "Flask==3.1.3",
+                "requested_targets": ["flask"],
+                "resolved_versions": {"Flask": "3.1.3"},
+                "packages": ["Flask"],
+                "source_type": "package",
+                "resolution_succeeded": True,
+            },
+            "scan": {"block": False, "warnings": [], "infos": []},
+            "provenance": {"block": False, "warnings": [], "infos": [], "details": []},
+            "install": {"attempted": True, "success": True, "target": "Flask==3.1.3"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
+                written = write_receipt(report)
+                base_url = self._start_server()
+
+                request = urllib.request.Request(f"{base_url}/api/receipts/{written['receipt_id']}", method="DELETE")
+                with urllib.request.urlopen(request) as response:
+                    status = response.status
+                    body = json.loads(response.read())
+
+                remaining = list_receipts()
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body["deleted"])
+        self.assertEqual(body["receipt_id"], written["receipt_id"])
+        self.assertEqual(remaining, [])
+
+    def test_delete_unknown_receipt_returns_404(self):
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
+                base_url = self._start_server()
+                request = urllib.request.Request(f"{base_url}/api/receipts/0123456789abcdef", method="DELETE")
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    urllib.request.urlopen(request)
+
+        self.assertEqual(ctx.exception.code, 404)
+        body = json.loads(ctx.exception.read())
+        self.assertFalse(body["deleted"])
+
+    def test_delete_with_extra_path_segments_returns_404_not_found(self):
+        # Not a receipt-not-found 404 (which still returns a JSON body) --
+        # a real routing miss, confirming the handler doesn't loosely
+        # match anything starting with "/api/receipts/".
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as key_dir:
+            with patch.dict(
+                os.environ,
+                {"DEPSHIELDX_RECEIPTS_DIR": temp_dir, "DEPSHIELDX_SIGNING_KEY_DIR": key_dir},
+                clear=False,
+            ):
+                base_url = self._start_server()
+                request = urllib.request.Request(f"{base_url}/api/receipts/abc/extra", method="DELETE")
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    urllib.request.urlopen(request)
+
+        self.assertEqual(ctx.exception.code, 404)
+        self.assertEqual(ctx.exception.getheader("Content-Type"), "text/plain; charset=utf-8")
