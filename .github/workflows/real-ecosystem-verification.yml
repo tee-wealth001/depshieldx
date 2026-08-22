@@ -58,7 +58,12 @@ jobs:
           - ecosystem: go
             target: "github.com/google/uuid@v1.6.0"
           - ecosystem: maven
-            target: "org.apache.commons:commons-lang3:3.14.0"
+            # 3.14.0 has a real, current CVE (CVE-2025-48924) --
+            # confirmed directly this made a real run correctly BLOCKED
+            # at the fast-mode provenance/vulnerability check (working
+            # as intended, not a depshieldx bug); 3.18.0 confirmed
+            # directly clean of reported vulnerabilities.
+            target: "org.apache.commons:commons-lang3:3.18.0"
           - ecosystem: nuget
             target: "Newtonsoft.Json@13.0.3"
           - ecosystem: pub
