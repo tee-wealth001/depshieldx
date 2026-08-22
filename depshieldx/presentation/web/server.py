@@ -1,20 +1,30 @@
-"""Local, read-only browser UI over cached receipts and cache entries.
+"""Local, browser UI over cached receipts and cache entries.
 
 A plain stdlib http.server -- no framework. The dashboard HTML/CSS/JS is a
 static template file (templates/dashboard.html, loaded once per server via
 runtime.resource_path() so it works both from source and from a future
 PyInstaller-frozen binary), not a Python string; it takes no server-side
 data, everything is fetched client-side from /api/cache.
+
+Mostly read-only, with one exception: DELETE /api/receipts/<id> lets the
+dashboard's own per-row delete button remove a single receipt --
+delete_receipt() itself validates the id shape before it ever reaches a
+filesystem path (see storage/receipts.py), so this handler only needs to
+route the request, not re-validate.
 """
 
 import json
+import re
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 import webbrowser
 
 from ...core.runtime import resource_path
+from ...storage.receipts import delete_receipt
 from .payloads import build_ui_payload
+
+_RECEIPT_DELETE_PATH = re.compile(r"^/api/receipts/([^/]+)$")
 
 
 def _dashboard_html() -> str:
@@ -25,6 +35,15 @@ def _make_handler():
     html_bytes = _dashboard_html().encode("utf-8")
 
     class Handler(BaseHTTPRequestHandler):
+        def _send_json(self, status: int, payload: dict) -> None:
+            body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path in {"", "/"}:
@@ -36,19 +55,29 @@ def _make_handler():
                 return
 
             if parsed.path == "/api/cache":
-                payload = json.dumps(build_ui_payload(), indent=2, sort_keys=True).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                self._send_json(200, build_ui_payload())
                 return
 
             self.send_response(404)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(b"Not found")
+
+        def do_DELETE(self):
+            parsed = urlparse(self.path)
+            match = _RECEIPT_DELETE_PATH.match(parsed.path)
+            if not match:
+                self.send_response(404)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"Not found")
+                return
+
+            receipt_id = match.group(1)
+            if delete_receipt(receipt_id):
+                self._send_json(200, {"deleted": True, "receipt_id": receipt_id})
+            else:
+                self._send_json(404, {"deleted": False, "receipt_id": receipt_id, "error": "receipt not found"})
 
         def log_message(self, format, *args):
             return

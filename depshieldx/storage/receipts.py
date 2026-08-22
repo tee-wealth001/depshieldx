@@ -1,4 +1,5 @@
 import hmac
+import re
 import stat
 import json
 import os
@@ -546,6 +547,46 @@ def list_receipts(limit: int = 20) -> list[dict]:
             }
         )
     return items
+
+
+_RECEIPT_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+
+
+def delete_receipt(receipt_id: str) -> bool:
+    """Deletes exactly the one receipt file matching receipt_id, unlike
+    delete_receipts() (bulk, unconditional) -- the UI's per-row delete
+    button needs to remove a single receipt without touching any other.
+    Matches write_receipt's own filename shape
+    (f"{timestamp}-{package}-{receipt_id}.json") via a suffix glob rather
+    than needing the timestamp/package prefix, since the UI only has the
+    receipt_id (payloads.py's own "id" field) to work with.
+
+    receipt_id comes from an HTTP request path segment (server.py's
+    do_DELETE) -- untrusted client input -- so it's validated against the
+    real receipt_id shape (build_receipt's own
+    sha256(...).hexdigest()[:16], always 16 lowercase hex characters)
+    before ever reaching glob(), which otherwise treats "/"/".." in a
+    pattern as real path-traversal components, not literal characters.
+    """
+    if not _RECEIPT_ID_PATTERN.match(receipt_id):
+        return False
+    try:
+        root = _ensure_receipts_root()
+    except ReceiptUnavailableError:
+        return False
+    if not root.exists():
+        return False
+    matches = list(root.glob(f"*-{receipt_id}.json"))
+    if not matches:
+        return False
+    deleted = False
+    for path in matches:
+        try:
+            path.unlink()
+            deleted = True
+        except OSError:
+            continue
+    return deleted
 
 
 def delete_receipts() -> int:

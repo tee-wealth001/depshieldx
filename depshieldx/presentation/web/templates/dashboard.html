@@ -333,6 +333,17 @@
       transform: translateY(-2px);
     }
 
+    .button.danger:hover:not(:disabled) {
+      border-color: var(--danger);
+      color: var(--danger);
+      background: rgba(26, 32, 44, 0.9);
+    }
+
+    .button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
     /* Main Content */
     .content {
       display: grid;
@@ -739,6 +750,9 @@
         <button id="copy-json" class="button">
            Copy JSON
         </button>
+        <button id="delete-receipt" class="button danger" disabled title="Select a receipt to delete">
+          🗑 Delete Receipt
+        </button>
       </div>
     </section>
 
@@ -912,10 +926,18 @@
       renderDetail(selected || null);
     }
 
+    function updateDeleteButton(row) {
+      const button = document.getElementById("delete-receipt");
+      const canDelete = !!(row && row.kind === "receipt");
+      button.disabled = !canDelete;
+      button.title = canDelete ? "Delete this receipt" : "Select a receipt to delete";
+    }
+
     function renderDetail(row) {
       const metaHost = document.getElementById("detail-meta");
       const jsonHost = document.getElementById("detail-json");
-      
+      updateDeleteButton(row);
+
       if (!row) {
         metaHost.innerHTML = '<div class="empty-icon">👈</div><p>Select a row to view details</p>';
         jsonHost.textContent = "{}";
@@ -983,6 +1005,31 @@
         setTimeout(() => { btn.textContent = orig; }, 2000);
       } catch (err) {
         console.error("Copy failed:", err);
+      }
+    });
+
+    document.getElementById("delete-receipt").addEventListener("click", async () => {
+      const selected = currentRows().find((row) => row.id === state.selectedId);
+      if (!selected || selected.kind !== "receipt") return;
+      const label = selected.package
+        ? `${selected.package}${selected.package_version ? "==" + selected.package_version : ""}`
+        : selected.id;
+      if (!confirm(`Delete receipt for ${label}? This cannot be undone.`)) return;
+
+      const button = document.getElementById("delete-receipt");
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/receipts/" + encodeURIComponent(selected.id), { method: "DELETE" });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || `Delete failed (HTTP ${response.status})`);
+        }
+        state.selectedId = null;
+        await loadData();
+      } catch (err) {
+        console.error("Delete failed:", err);
+        alert("Could not delete receipt: " + (err.message || "Unknown error"));
+        button.disabled = false;
       }
     });
 
