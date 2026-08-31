@@ -13,7 +13,7 @@ vulnerability checks and full deep-mode Docker + Trivy behavioral tracing.
 | [NuGet](nuget.md) | `packages.lock.json` | `--ecosystem nuget` | `dotnet` | Yes | Checksum + X.509 presence |
 | [Pub](pub.md) | `pubspec.lock` | `--ecosystem pub` | `dart` | Yes | Checksum only |
 | [RubyGems](rubygems.md) | `Gemfile.lock` | `--ecosystem rubygems` | `bundle` | Yes | Checksum only |
-| [Composer](composer.md) | `composer.lock` | `--ecosystem composer` | `composer` | Yes | Weakest &mdash; git ref pin, rarely a checksum |
+| [Composer](composer.md) | `composer.lock` | `--ecosystem composer` | `composer` | Yes | Weakest -- git ref pin, rarely a checksum |
 
 Each ecosystem page covers:
 

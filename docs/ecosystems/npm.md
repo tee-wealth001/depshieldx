@@ -5,7 +5,7 @@ mode support.
 
 Two ways to point it at npm:
 
-**A lockfile in the current directory** &mdash; auto-detected by filename, no flag
+**A lockfile in the current directory** -- auto-detected by filename, no flag
 needed:
 
 ```bash
@@ -15,7 +15,7 @@ depshieldx scan --lockfile pnpm-lock.yaml
 depshieldx install --lockfile package-lock.json
 ```
 
-**One or more bare package names** &mdash; pass `--ecosystem npm` so `depshieldx`
+**One or more bare package names** -- pass `--ecosystem npm` so `depshieldx`
 knows they aren't PyPI names:
 
 ```bash
@@ -32,16 +32,16 @@ range, so nothing can drift to a different release between the scan and the inst
 
 If you have the [routing shim](../cli/routing.md) enabled, `npm install <package>` is
 also intercepted automatically and routed through
-`depshieldx install <package> --ecosystem npm` &mdash; you don't need to change your
+`depshieldx install <package> --ecosystem npm` -- you don't need to change your
 muscle memory.
 
 npm/yarn/pnpm has full functional parity with PyPI: `--deep` (Docker + Trivy + real
 behavioral tracing via strace), `depshieldx uninstall`, and cryptographic provenance
 verification (real Sigstore bundle verification of npm's SLSA provenance attestations,
-not just presence checks &mdash; see [Provenance & Attestations](../concepts/provenance.md))
+not just presence checks -- see [Provenance & Attestations](../concepts/provenance.md))
 are all supported.
 
 ## Not supported
 
-- `requirements.txt`/`pyproject.toml`-style inputs &mdash; those formats are
+- `requirements.txt`/`pyproject.toml`-style inputs -- those formats are
   inherently PyPI-specific; use a lockfile or `--ecosystem npm` instead

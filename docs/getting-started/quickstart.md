@@ -90,6 +90,6 @@ depshieldx uninstall --pyproject pyproject.toml
 
 ## Other ecosystems
 
-Each ecosystem has its own bare-name and lockfile examples on its own page &mdash; see
+Each ecosystem has its own bare-name and lockfile examples on its own page -- see
 the [ecosystems overview](../ecosystems/index.md), or jump to the full command list on
 the [Examples](../examples.md) page.

@@ -55,7 +55,7 @@ keeping those tools up to date is part of the security model.
         npm has no equivalent in-process hook, so behavioral tracing instead wraps the
         sandboxed `npm install` in `strace`, observing the same categories of activity
         across the whole install (including lifecycle scripts) rather than blocking
-        individual syscalls live &mdash; filesystem/network isolation is still enforced
+        individual syscalls live -- filesystem/network isolation is still enforced
         by the container itself either way. The npm sandbox runs in a small `node:20` +
         `strace` image `depshieldx` builds and caches locally the first time it's
         needed.
@@ -81,12 +81,12 @@ keeping those tools up to date is part of the security model.
         Cargo's `build.rs`/proc-macros) rather than blocking individual syscalls live.
         The Go sandbox runs in a small `golang:1-bookworm` + `strace` image built and
         cached locally the first time it's needed. Like Cargo, Trivy scans a host-side
-        `go.mod`/`go.sum` pair built before the container runs &mdash; Trivy reads Go's
+        `go.mod`/`go.sum` pair built before the container runs -- Trivy reads Go's
         manifest files natively, needing no extracted source tree the way Cargo's
         vendor directory does. One Go-specific wrinkle: unlike Cargo (which compiles
         every declared dependency regardless of use), Go only compiles what's actually
         imported, so a scratch program blank-imports every resolved module to force
-        real compilation &mdash; and not every module has an importable root package
+        real compilation -- and not every module has an importable root package
         (some are subpackage-only, e.g. `golang.org/x/crypto`). Those are skipped from
         tracing rather than failing the whole build, and listed in the full JSON
         report's `skipped_modules`.
@@ -98,12 +98,12 @@ keeping those tools up to date is part of the security model.
         code that runs automatically just by being resolved, or even sitting on the
         compile classpath. The one real exception is an annotation processor
         registered via `META-INF/services` (Lombok, MapStruct, Dagger, and similar)
-        &mdash; `javac` auto-discovers and invokes it during any compile it's present
+        -- `javac` auto-discovers and invokes it during any compile it's present
         for, regardless of whether the compiled source actually uses its target
         annotations. So the sandboxed `mvn compile` (against a trivial scratch source
         file, wrapped in `strace`) traces real activity for that class of dependency,
         and genuinely zero extra activity for the (large majority) of ordinary
-        libraries that register no processor &mdash; an accurate verdict, not a
+        libraries that register no processor -- an accurate verdict, not a
         coverage gap. The Maven sandbox runs in a small
         `maven:3-eclipse-temurin-21` + `strace` image built and cached locally the
         first time it's needed, with Maven's own default-lifecycle plugin set
@@ -117,16 +117,16 @@ keeping those tools up to date is part of the security model.
         compiled ecosystems: a `.nupkg` consumed as a plain `PackageReference` has no
         code that runs automatically during `dotnet restore` alone, but any package
         shipping a `build/*.targets` or `build/*.props` file gets it imported and
-        evaluated during `dotnet build` &mdash; not a narrow processor-registration
+        evaluated during `dotnet build` -- not a narrow processor-registration
         mechanism like Maven's, but MSBuild's own general build-time extensibility
         point, available to any package that uses it. So the sandboxed `dotnet build`
         (against a trivial scratch source file, wrapped in `strace`) traces this real,
         broader surface. The NuGet sandbox runs in a small
         `mcr.microsoft.com/dotnet/sdk:8.0` + `strace` image built and cached locally
-        the first time it's needed &mdash; no plugin pre-warming needed, unlike
+        the first time it's needed -- no plugin pre-warming needed, unlike
         Maven's `compile` goal. Like Cargo/Go/Maven, Trivy scans a host-side
         `packages.lock.json` built before the container runs (via a real, networked
-        `dotnet restore` against the resolved set) &mdash; Trivy's NuGet support needs
+        `dotnet restore` against the resolved set) -- Trivy's NuGet support needs
         a real lock file, detecting nothing from a bare `.csproj`.
 
     === "Pub"
@@ -135,10 +135,10 @@ keeping those tools up to date is part of the security model.
         "hooks" feature: a package can ship a `hook/build.dart` file (a real Dart
         entry point, typically used to compile a native C/Rust library) that the
         toolchain invokes for the root package and every transitive dependency during
-        `dart run`/`dart test` &mdash; confirmed this fires even when nothing actually
+        `dart run`/`dart test` -- confirmed this fires even when nothing actually
         imports the package, the same "presence in the dependency graph is enough"
         pattern Maven's/NuGet's own surfaces have. `dart pub get` alone never triggers
-        hooks &mdash; so the sandboxed `dart run` (against a trivial scratch
+        hooks -- so the sandboxed `dart run` (against a trivial scratch
         entry-point file, wrapped in `strace`) is what actually traces this surface;
         `dart compile exe` was deliberately not used instead, since it refuses to run
         hooks at all. The Pub sandbox runs in a small `dart:3` + `strace` image built
@@ -152,19 +152,19 @@ keeping those tools up to date is part of the security model.
         RubyGems behavioral tracing looks different from every other ecosystem here
         in one fundamental way: a native-extension gem's own `extconf.rb` build
         script runs as an unavoidable, inherent part of *installing* the gem itself,
-        not a separate later run/build step &mdash; so there's no clean split between
+        not a separate later run/build step -- so there's no clean split between
         "resolve/restore, unstraced" and "run/build, straced". `bundle install` is
-        never safe to run on the host at all &mdash; unlike
+        never safe to run on the host at all -- unlike
         `cargo fetch --locked`/`go mod download`/`dotnet restore`/`dart pub get`, none
         of which invoke a compiler, `bundle install` genuinely compiles native code
         for any gem that ships one. So `depshieldx` never shells out to
         `bundle install`/`bundle lock` on the host to build the Trivy-facing
         lockfile; it writes `Gemfile.lock` directly from the resolution it already has
         (itself produced by a real, safe `bundle lock` scratch resolve). The sandboxed
-        `bundle install --local` &mdash; the same command Docker deep mode's offline
-        install step already runs &mdash; is what gets wrapped in `strace` instead.
+        `bundle install --local` -- the same command Docker deep mode's offline
+        install step already runs -- is what gets wrapped in `strace` instead.
         The RubyGems sandbox runs in a small `ruby:3` + `strace` image built and
-        cached locally the first time it's needed &mdash; deliberately not `-slim`,
+        cached locally the first time it's needed -- deliberately not `-slim`,
         since it needs to ship a real C toolchain (gcc/make) for native-extension
         compilation to succeed (nokogiri, sqlite3, pg, bcrypt, ...).
 
@@ -172,15 +172,15 @@ keeping those tools up to date is part of the security model.
 
         Composer behavioral tracing targets a narrower, but real and non-opt-in,
         surface: a plain `composer install --no-plugins --no-scripts` never executes a
-        dependency's own code at all &mdash; Composer 2.2+ blocks any package
+        dependency's own code at all -- Composer 2.2+ blocks any package
         containing a Composer plugin by default unless the project explicitly
         allow-lists it (`depshieldx` never does), and Composer's script hooks are
         root-project-only by design. The real surface is PHP's own "files" autoload
         mechanism: a package can declare
         `"autoload": {"files": ["bootstrap.php"]}`, and that file executes
         unconditionally the moment anything actually loads the generated
-        `vendor/autoload.php` &mdash; even with zero explicit reference to the
-        package's own classes &mdash; unlike ordinary PSR-4 class autoloading, which
+        `vendor/autoload.php` -- even with zero explicit reference to the
+        package's own classes -- unlike ordinary PSR-4 class autoloading, which
         is lazy. So the sandboxed install runs `composer install` unstraced first
         (already proven safe), then straces a trivial scratch probe script that does
         nothing but load the autoloader. The Composer sandbox runs in a small

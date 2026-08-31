@@ -19,7 +19,7 @@
 - `--lockfile composer.lock` (Composer, auto-detected by filename)
 - `--pyproject pyproject.toml` (PyPI only)
 
-Maven has no canonical lockfile, so it has no `--lockfile` equivalent &mdash;
+Maven has no canonical lockfile, so it has no `--lockfile` equivalent --
 coordinates are always passed explicitly via `--ecosystem maven`.
 
 ## Lockfile parsing behavior
@@ -31,16 +31,16 @@ coordinates are always passed explicitly via `--ecosystem maven`.
   dropped
 - `go.sum` resolution reads the sibling `go.mod`'s full resolved module graph (via
   `go list -m all`) rather than parsing `go.sum` itself, since `go.sum` is a checksum
-  allowlist, not the resolved graph &mdash; it can list more module versions than
+  allowlist, not the resolved graph -- it can list more module versions than
   actually ship
 - `packages.lock.json` is parsed directly; if a package appears across multiple target
   frameworks with disagreeing versions, only the newest resolved version is kept, the
   same "keep the newest" rule as `Cargo.lock`
 - `pubspec.lock` is parsed directly (it's real YAML); only `source: hosted` entries
-  are resolved against the registry &mdash; `source: git`/`source: path`/`source: sdk`
+  are resolved against the registry -- `source: git`/`source: path`/`source: sdk`
   entries have no registry checksum to verify against and are skipped
 - `Gemfile.lock` is parsed directly (Bundler's own custom text format, not
-  YAML/JSON); only the `GEM` section's resolved specs are read &mdash; `GIT`/`PATH`
+  YAML/JSON); only the `GEM` section's resolved specs are read -- `GIT`/`PATH`
   sections have no registry checksum to verify against and are skipped
 - `composer.lock` is parsed directly (it's real JSON); direct-vs-transitive
   dependency status is read from the sibling `composer.json`'s own

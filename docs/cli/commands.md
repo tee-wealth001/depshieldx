@@ -29,8 +29,8 @@ depshieldx cache --help
 ```
 
 `depshieldx doctor` checks every prerequisite this project performs piecemeal
-elsewhere &mdash; the Python/pip version gate, Docker daemon availability, host
-Trivy availability, and each ecosystem's own toolchain on `PATH` &mdash; in one
+elsewhere -- the Python/pip version gate, Docker daemon availability, host
+Trivy availability, and each ecosystem's own toolchain on `PATH` -- in one
 pass, so a missing toolchain shows up before an install/scan run rather than
 mid-run.
 

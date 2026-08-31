@@ -7,7 +7,7 @@ title: depshieldx
 # depshieldx
 
 <p class="tagline">
-A safer wrapper around package install and scan workflows &mdash; for PyPI, npm/yarn/pnpm,
+A safer wrapper around package install and scan workflows -- for PyPI, npm/yarn/pnpm,
 Cargo/crates.io, Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev,
 RubyGems/rubygems.org, and Composer/Packagist.
 </p>
@@ -40,7 +40,7 @@ signed local receipt JSON files.
 
     ---
 
-    Verifies the exact release artifacts that would be used &mdash; cryptographic
+    Verifies the exact release artifacts that would be used -- cryptographic
     Sigstore verification on PyPI/npm/Maven, checksum + structural checks elsewhere.
 
     [:octicons-arrow-right-24: Provenance & Attestations](concepts/provenance.md)

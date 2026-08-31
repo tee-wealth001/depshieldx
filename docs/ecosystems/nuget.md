@@ -5,7 +5,7 @@ deep mode support.
 
 Two ways to point it at NuGet:
 
-**A `packages.lock.json` file in the current directory** &mdash; auto-detected by
+**A `packages.lock.json` file in the current directory** -- auto-detected by
 filename, no flag needed:
 
 ```bash
@@ -13,7 +13,7 @@ depshieldx scan --lockfile packages.lock.json
 depshieldx install --lockfile packages.lock.json
 ```
 
-**One or more bare package names** &mdash; pass `--ecosystem nuget` so `depshieldx`
+**One or more bare package names** -- pass `--ecosystem nuget` so `depshieldx`
 knows they aren't PyPI names:
 
 ```bash
@@ -30,21 +30,21 @@ scratch-project resolve.
 
 If you have the [routing shim](../cli/routing.md) enabled, `dotnet add package <name>`
 is also intercepted automatically and routed through
-`depshieldx install <name> --ecosystem nuget` &mdash; you don't need to change your
+`depshieldx install <name> --ecosystem nuget` -- you don't need to change your
 muscle memory.
 
-"Install" here means `dotnet add package` &mdash; adding the package to your
+"Install" here means `dotnet add package` -- adding the package to your
 project's `.csproj`/`packages.lock.json`. Unlike Maven, `depshieldx uninstall` is
 supported for NuGet, via `dotnet remove package`. Both directions are scoped to
-exactly one package per invocation &mdash; `dotnet add package`/`dotnet remove
+exactly one package per invocation -- `dotnet add package`/`dotnet remove
 package` themselves only ever accept a single package name.
 
 `--deep` is supported the same way it is for PyPI, npm, Cargo, Go, and Maven: the
 resolved package set (every real `.nupkg`) is fetched into a sandboxed container
 (`mcr.microsoft.com/dotnet/sdk:8.0` + `strace`) and scanned with Trivy against a real,
-host-generated `packages.lock.json` &mdash; Trivy's NuGet support needs a real lock
+host-generated `packages.lock.json` -- Trivy's NuGet support needs a real lock
 file, it detects nothing from a bare `.csproj`. The sandboxed `dotnet build` is traced
-with `strace` for filesystem, process, and network activity &mdash; see
+with `strace` for filesystem, process, and network activity -- see
 [Modes](../concepts/modes.md) for details. Unlike Maven's narrow annotation-processor
 exception, any package shipping a `build/*.targets` or `build/*.props` file gets it
 imported and evaluated during `dotnet build`, MSBuild's own general build-time
@@ -52,15 +52,15 @@ extensibility point.
 
 Provenance checks for NuGet combine a real cryptographic checksum check (SHA-512,
 verified against the exact hash NuGet.org's registration API publishes for that
-release) with structural repository-signature presence &mdash; NuGet.org has no
+release) with structural repository-signature presence -- NuGet.org has no
 Sigstore/SLSA equivalent, but unlike Maven's opt-in PGP/Sigstore signing, it does
 unconditionally repository-sign every package it hosts with an X.509/Authenticode
-signature &mdash; see [Provenance & Attestations](../concepts/provenance.md).
+signature -- see [Provenance & Attestations](../concepts/provenance.md).
 
 ## Not supported
 
-- `.csproj`-as-input &mdash; only `packages.lock.json` or bare package names via
+- `.csproj`-as-input -- only `packages.lock.json` or bare package names via
   `--ecosystem nuget` are accepted
-- cryptographic chain verification of the repository signature &mdash; `depshieldx`
+- cryptographic chain verification of the repository signature -- `depshieldx`
   has no trust-root/certificate-chain-validation story for X.509 elsewhere, so
   presence is recorded structurally, the same way Maven's PGP-signature presence is

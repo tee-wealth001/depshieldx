@@ -8,7 +8,7 @@ For a release build:
 - run `python -m build`
 - run `python -m twine check dist/*`
 - for TestPyPI, run the `Release Checks` workflow manually
-- for PyPI, push a version tag such as `v0.1.0` &mdash; this also triggers the
+- for PyPI, push a version tag such as `v0.1.0` -- this also triggers the
   `Release Binaries` workflow, which builds and attaches the standalone
   per-platform binaries to the matching GitHub Release
 

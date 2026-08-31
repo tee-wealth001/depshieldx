@@ -5,7 +5,7 @@ mode support.
 
 Two ways to point it at Cargo:
 
-**A `Cargo.lock` file in the current directory** &mdash; auto-detected by filename, no
+**A `Cargo.lock` file in the current directory** -- auto-detected by filename, no
 flag needed:
 
 ```bash
@@ -13,7 +13,7 @@ depshieldx scan --lockfile Cargo.lock
 depshieldx install --lockfile Cargo.lock
 ```
 
-**One or more bare crate names** &mdash; pass `--ecosystem cargo` so `depshieldx`
+**One or more bare crate names** -- pass `--ecosystem cargo` so `depshieldx`
 knows they aren't PyPI names:
 
 ```bash
@@ -28,29 +28,29 @@ dependency set, then checks that whole resolved set before installing.
 
 If you have the [routing shim](../cli/routing.md) enabled, `cargo add <crate>` is also
 intercepted automatically and routed through
-`depshieldx install <crate> --ecosystem cargo` &mdash; you don't need to change your
+`depshieldx install <crate> --ecosystem cargo` -- you don't need to change your
 muscle memory.
 
-"Install" here means `cargo add` &mdash; adding the crate(s) to your project's
-`Cargo.toml`/`Cargo.lock` &mdash; not `cargo install` (installing a binary crate).
+"Install" here means `cargo add` -- adding the crate(s) to your project's
+`Cargo.toml`/`Cargo.lock` -- not `cargo install` (installing a binary crate).
 `depshieldx` does not currently support installing binary crates.
 
 `--deep` is supported the same way it is for PyPI and npm: the resolved crate set is
 fetched into a sandboxed container (`rust:1-slim` + `strace`) and scanned with Trivy,
 and the sandboxed `cargo build --offline` is traced with `strace` for filesystem,
-process, and network activity &mdash; see [Modes](../concepts/modes.md) for details.
+process, and network activity -- see [Modes](../concepts/modes.md) for details.
 `depshieldx uninstall` is also supported, via `cargo remove`.
 
 Provenance checks for Cargo are structural only, not cryptographic: crates.io has no
 Sigstore/SLSA attestation infrastructure to verify against, unlike PyPI and npm.
-Checks are limited to things like yanked-release status and registry metadata &mdash;
+Checks are limited to things like yanked-release status and registry metadata --
 see [Provenance & Attestations](../concepts/provenance.md).
 
 ## Not supported
 
-- installing binary crates (`cargo install`) &mdash; `depshieldx`'s Cargo support only
+- installing binary crates (`cargo install`) -- `depshieldx`'s Cargo support only
   covers dependency crates added via `cargo add`
-- `Cargo.toml`-as-input &mdash; only `Cargo.lock` or bare crate names via
+- `Cargo.toml`-as-input -- only `Cargo.lock` or bare crate names via
   `--ecosystem cargo` are accepted
-- cryptographic provenance verification &mdash; crates.io has nothing to verify
+- cryptographic provenance verification -- crates.io has nothing to verify
   against
