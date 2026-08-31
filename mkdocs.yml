@@ -1,0 +1,109 @@
+site_name: depshieldx
+site_description: >-
+  Safer package install and scan workflows for PyPI, npm/yarn/pnpm, Cargo/crates.io,
+  Go modules, Maven/Maven Central, NuGet/NuGet.org, Pub/pub.dev, RubyGems/rubygems.org,
+  and Composer/Packagist, with cryptographic provenance checks, CVE lookups, Docker +
+  Trivy deep mode with behavioral tracing, and signed receipts.
+site_url: https://tee-wealth001.github.io/depshieldx/
+repo_name: tee-wealth001/depshieldx
+repo_url: https://github.com/tee-wealth001/depshieldx
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; Stephen Toriola &mdash; Apache License 2.0
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - Concepts:
+      - Modes (Fast vs Deep): concepts/modes.md
+      - Supported Inputs: concepts/supported-inputs.md
+      - Output & Summary: concepts/output.md
+      - Provenance & Attestations: concepts/provenance.md
+      - Vulnerability Sources: concepts/vulnerability-sources.md
+      - Receipts: concepts/receipts.md
+  - Ecosystems:
+      - Overview: ecosystems/index.md
+      - npm / yarn / pnpm: ecosystems/npm.md
+      - Cargo / crates.io: ecosystems/cargo.md
+      - Go Modules: ecosystems/go.md
+      - Maven / Maven Central: ecosystems/maven.md
+      - NuGet: ecosystems/nuget.md
+      - Pub: ecosystems/pub.md
+      - RubyGems: ecosystems/rubygems.md
+      - Composer: ecosystems/composer.md
+  - CLI Reference:
+      - Commands: cli/commands.md
+      - Local UI: cli/local-ui.md
+      - Routing: cli/routing.md
+      - Cache & Exit Codes: cli/cache-and-exit-codes.md
+  - Examples: examples.md
+  - Limitations: limitations.md
+  - FAQ: faq.md
+  - Release Notes: release-notes.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/tee-wealth001/depshieldx
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/depshieldx/

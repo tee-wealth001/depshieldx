@@ -17,6 +17,9 @@ build/
 *.egg
 *.egg-info
 
+# MkDocs build output
+site/
+
 # C extensions
 *.so
 .*.dylib
